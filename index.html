@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Строящиеся ЖК на карте</title>
+    <meta name="referrer" content="strict-origin-when-cross-origin">
+
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin="" />
+    <style>
+        html, body { margin: 0; padding: 0; height: 100%; }
+        #map { width: 100%; height: 100vh; }
+
+        /* ---------- Попап ---------- */
+        .zhk-popup b { font-size: 14px; }
+        .zhk-popup .row { margin-top: 4px; font-size: 12px; color: #444; }
+        .zhk-popup .phase {
+            display: inline-block; padding: 2px 8px; border-radius: 10px;
+            font-size: 11px; font-weight: bold; color: #fff; margin-top: 6px;
+        }
+        .phase-gray   { background: #777; }
+        .phase-green  { background: #2e9e44; }
+        .phase-orange { background: #e08b00; }
+        .phase-red    { background: #d63b3b; }
+        .phase-black  { background: #000; }
+
+        .zhk-popup .btn-2gis {
+            display: inline-block; margin-top: 8px; padding: 6px 10px;
+            background: #00b956; color: #fff; border-radius: 4px;
+            text-decoration: none; font-size: 12px; font-weight: bold;
+        }
+        .zhk-popup .btn-2gis:hover { background: #009a46; }
+
+        /* ---------- Легенда ---------- */
+        .legend {
+            position: absolute; right: 12px; bottom: 12px; z-index: 1000;
+            background: rgba(255,255,255,.95); padding: 10px 14px;
+            border-radius: 6px; box-shadow: 0 1px 6px rgba(0,0,0,.3);
+            font: 12px/1.5 sans-serif;
+        }
+        .legend .item { display: flex; align-items: center; margin-top: 4px; }
+        .legend .dot {
+            width: 12px; height: 12px; border-radius: 50%;
+            margin-right: 8px; border: 2px solid #fff;
+            box-shadow: 0 0 0 1px #aaa;
+        }
+
+        /* ---------- Кнопка "Моё местоположение" ---------- */
+        #geo-btn {
+            position: absolute; top: 12px; right: 12px; z-index: 1000;
+            display: flex; align-items: center; gap: 8px;
+            padding: 8px 14px; border: none; border-radius: 6px;
+            background: rgba(255,255,255,.97); color: #333;
+            box-shadow: 0 1px 6px rgba(0,0,0,.3);
+            font: 13px/1.2 system-ui, sans-serif; font-weight: 600;
+            cursor: pointer;
+            transition: background .15s ease, color .15s ease;
+        }
+        #geo-btn:hover { background: #f3f3f3; }
+        #geo-btn:disabled { cursor: progress; color: #999; }
+        #geo-btn .status-dot {
+            width: 8px; height: 8px; border-radius: 50%;
+            background: #ccc;
+        }
+        #geo-btn.ok    .status-dot { background: #2e9e44; }
+        #geo-btn.error .status-dot { background: #d63b3b; }
+
+        /* ---------- Индикатор загрузки ---------- */
+        #loader {
+            position: fixed; inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: rgba(255, 255, 255, 0.92);
+            z-index: 10000;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            color: #333;
+            transition: opacity 0.3s ease;
+        }
+        #loader.hidden { opacity: 0; pointer-events: none; }
+        #loader .spinner {
+            width: 56px; height: 56px;
+            border: 5px solid #e3e3e3; border-top-color: #2e9e44;
+            border-radius: 50%; animation: spin 0.9s linear infinite;
+        }
+        #loader .title { margin-top: 18px; font-size: 18px; font-weight: 600; }
+        #loader .subtitle { margin-top: 8px; font-size: 13px; color: #666; }
+        #loader .timer { margin-top: 14px; font-variant-numeric: tabular-nums; font-size: 14px; color: #888; }
+        #loader.error .spinner { display: none; }
+        #loader.error .title { color: #d63b3b; }
+        #loader .error-msg { display: none; margin-top: 10px; max-width: 460px; text-align: center; font-size: 13px; color: #666; }
+        #loader.error .error-msg { display: block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+<div id="map"></div>
+
+<!-- Кнопка "Моё местоположение" -->
+<button id="geo-btn" title="Разрешить доступ к вашему местоположению">
+    <span class="status-dot"></span>
+    <span class="label">📍 Моё местоположение</span>
+</button>
+
+<!-- Легенда -->
+<div class="legend">
+    <b>Фаза стройки</b>
+    <div class="item"><span class="dot" style="background:#2e9e44"></span>начальная стадия (&gt;18 мес.)</div>
+    <div class="item"><span class="dot" style="background:#e08b00"></span>в процессе (6–18 мес.)</div>
+    <div class="item"><span class="dot" style="background:#d63b3b"></span>скоро сдача (&lt;6 мес.)</div>
+    <div class="item"><span class="dot" style="background:#000"></span>просрочено</div>
+    <div class="item"><span class="dot" style="background:#777"></span>не начато</div>
+</div>
+
+<!-- Индикатор загрузки -->
+<div id="loader">
+    <div class="spinner"></div>
+    <div class="title">Загружаем данные о ЖК…</div>
+    <div class="subtitle">Это может занять до 30 секунд</div>
+    <div class="timer">Прошло: 0 с</div>
+    <div class="error-msg"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+        crossorigin=""></script>
+
+<script>
+    // ============================================================
+    // 0. Управление индикатором загрузки
+    // ============================================================
+    const loader     = document.getElementById('loader');
+    const timerEl    = loader.querySelector('.timer');
+    const titleEl    = loader.querySelector('.title');
+    const errorMsgEl = loader.querySelector('.error-msg');
+
+    let secondsPassed = 0;
+    const timerInterval = setInterval(() => {
+        secondsPassed += 1;
+        timerEl.textContent = `Прошло: ${secondsPassed} с`;
+    }, 1000);
+
+    function hideLoader() {
+        clearInterval(timerInterval);
+        loader.classList.add('hidden');
+    }
+    function showLoaderError(message) {
+        clearInterval(timerInterval);
+        loader.classList.add('error');
+        titleEl.textContent = 'Не удалось загрузить данные';
+        timerEl.style.display = 'none';
+        errorMsgEl.textContent = message || 'Проверьте соединение с сервером и обновите страницу.';
+    }
+
+    // ============================================================
+    // 1. Карта
+    // ============================================================
+    const map = L.map('map', {
+        updateWhenIdle: true,
+        updateWhenZooming: false,
+        keepBuffer: 2
+    }).setView([51.128, 71.430], 11);
+
+    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+        referrerPolicy: 'strict-origin-when-cross-origin',
+        crossOrigin: true
+    }).addTo(map);
+
+    // ============================================================
+    // 2. Иконки
+    // ============================================================
+    const ICON_BASE = 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img';
+    const SHADOW    = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png';
+    const iconOpts  = { iconSize:[25,41], iconAnchor:[12,41], popupAnchor:[1,-34], shadowSize:[41,41], shadowUrl: SHADOW };
+    const icons = {
+        green:  L.icon({ ...iconOpts, iconUrl: `${ICON_BASE}/marker-icon-green.png`  }),
+        orange: L.icon({ ...iconOpts, iconUrl: `${ICON_BASE}/marker-icon-orange.png` }),
+        red:    L.icon({ ...iconOpts, iconUrl: `${ICON_BASE}/marker-icon-red.png`    }),
+        black:  L.icon({ ...iconOpts, iconUrl: `${ICON_BASE}/marker-icon-black.png`  }),
+        gray:   L.icon({ ...iconOpts, iconUrl: `${ICON_BASE}/marker-icon-grey.png`   })
+    };
+
+    // ============================================================
+    // 3. Моё местоположение
+    // ============================================================
+    // userLocation = { lat, lon } или null
+    let userLocation = null;
+    // Ссылки на попапы каждой метки — чтобы обновлять их после геолокации
+    const markersRefs = [];      // [{ marker, zhk }]
+
+    const geoBtn = document.getElementById('geo-btn');
+    const geoLabel = geoBtn.querySelector('.label');
+
+    function buildRouteUrl(zhk) {
+        // Координаты назначения в формате lon,lat
+        const toCoord = `${zhk.lon},${zhk.lat}`;
+
+        // Если известно местоположение пользователя, строим полный маршрут
+        if (userLocation) {
+            const fromCoord = `${userLocation.lon},${userLocation.lat}`;
+            // Разделитель | нужно закодировать как %7C
+            return `https://2gis.ru/directions/points/${fromCoord}%7C${toCoord}`;
+        }
+
+        // Если местоположение неизвестно, строим маршрут только до точки (2ГИС сам спросит откуда)
+        return `https://2gis.ru/directions/points/%7C${toCoord}`;
+    }
+    
+    function buildPopupHtml(zhk) {
+        const route2gis  = buildRouteUrl(zhk);
+        const phaseClass = `phase-${zhk.color}`;
+
+        let datesRow = '';
+        if (zhk.start_date_display || zhk.end_date_display) {
+            datesRow = `<div class="row">📅 ${zhk.start_date_display || '?'} → ${zhk.end_date_display || '?'}</div>`;
+        }
+        let leftRow = '';
+        if (zhk.months_left !== null && zhk.months_left !== undefined) {
+            leftRow = `<div class="row">⏳ Осталось: ~${zhk.months_left} мес.</div>`;
+        }
+
+        const fromHint = userLocation
+            ? '<div class="row" style="color:#2e9e44">✔ Маршрут от вашего местоположения</div>'
+            : '';
+
+        return `
+            <div class="zhk-popup">
+                <b>${zhk.name}</b>
+                <div class="row">🏗 ${zhk.developer}</div>
+                <div class="row">📍 ${zhk.address}</div>
+                ${datesRow}
+                ${leftRow}
+                <div class="phase ${phaseClass}">${zhk.phase}</div>
+                ${fromHint}
+                <div><a class="btn-2gis" target="_blank" href="${route2gis}">🚗 Маршрут в 2ГИС</a></div>
+            </div>
+        `;
+    }
+
+    function refreshAllPopups() {
+        markersRefs.forEach(({ marker, zhk }) => {
+            marker.setPopupContent(buildPopupHtml(zhk));
+        });
+    }
+
+    geoBtn.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+            geoBtn.classList.add('error');
+            geoLabel.textContent = 'Геолокация не поддерживается';
+            return;
+        }
+
+        geoBtn.disabled = true;
+        geoLabel.textContent = 'Определяем…';
+
+        navigator.geolocation.getCurrentPosition(
+            (pos) => {
+                userLocation = {
+                    lat: pos.coords.latitude,
+                    lon: pos.coords.longitude
+                };
+                geoBtn.disabled = false;
+                geoBtn.classList.remove('error');
+                geoBtn.classList.add('ok');
+                geoLabel.textContent = '📍 Местоположение определено';
+
+                // Обновляем попапы у всех меток — теперь у них появится from
+                refreshAllPopups();
+            },
+            (err) => {
+                geoBtn.disabled = false;
+                geoBtn.classList.remove('ok');
+                geoBtn.classList.add('error');
+
+                let msg = 'Ошибка геолокации';
+                if (err.code === err.PERMISSION_DENIED)    msg = 'Доступ запрещён';
+                else if (err.code === err.POSITION_UNAVAILABLE) msg = 'Позиция недоступна';
+                else if (err.code === err.TIMEOUT)         msg = 'Таймаут';
+
+                geoLabel.textContent = '📍 ' + msg;
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 60000       // 1 минута — можно использовать свежий кэш
+            }
+        );
+    });
+
+    // ============================================================
+    // 4. Загрузка ЖК
+    // ============================================================
+    fetch('/api/zhk')
+        .then(r => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+        .then(resp => {
+            if (!resp.success) throw new Error(resp.message || 'API вернул ошибку');
+            const list = resp.data || [];
+            console.log('Получено ЖК:', list.length);
+
+            const layer = L.featureGroup().addTo(map);
+
+            list.forEach(zhk => {
+                const icon = icons[zhk.color] || icons.gray;
+                const marker = L.marker([zhk.lat, zhk.lon], { icon });
+
+                marker.bindPopup(buildPopupHtml(zhk));
+                layer.addLayer(marker);
+                markersRefs.push({ marker, zhk });
+            });
+
+            if (layer.getLayers().length > 0) {
+                map.fitBounds(layer.getBounds(), { padding: [30, 30] });
+            }
+            hideLoader();
+        })
+        .catch(err => {
+            console.error('Ошибка загрузки ЖК:', err);
+            showLoaderError(err.message);
+        });
+
+    // Клик по карте — координаты в консоль
+    map.on('click', e => {
+        console.log('Клик:', e.latlng.lat.toFixed(6), e.latlng.lng.toFixed(6));
+    });
+</script>
+</body>
+</html>
