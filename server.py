@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-HTTP-сервер со стримингом ЖК через SSE:
+HTTP-сервер со стримингом ЖК через SSE + определение БИН заказчика через DaData:
 - /                    → index.html
 - /api/zhk             → весь список сразу (для отладки)
 - /api/zhk/stream      → SSE-поток: meta → zhk* → done
 
 Фильтры:
 1. constructionTypeName.ru == "Новое строительство"
-2. constructionObjectCategoryName.ru содержит одно из ключевых слов жилья
+2. constructionObjectCategoryName.ru содержит жилые ключевые слова
+
+Для каждого ЖК дополнительно получаем БИН заказчика через DaData.
 """
 
 import json
@@ -24,9 +26,12 @@ from urllib.error import URLError, HTTPError
 # ============================================================
 QPORTAL_SEARCH_URL = "https://gateway.qportal.kz/api/main/ProjectRegistry/search"
 NOMINATIM_URL      = "https://nominatim.openstreetmap.org/search"
+DADATA_SUGGEST_URL = "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/party_kz"
 
-# ЗАМЕНИТЕ на свой email — требование политики Nominatim
-USER_AGENT = "ZhkMapBot/1.0 (contact: ultraresonance@gmail.com)"
+DADATA_API_KEY     = os.environ.get("DADATA_API_KEY", "")
+USER_AGENT_CONTACT = os.environ.get("USER_AGENT_CONTACT", "")
+USER_AGENT         = "ZhKhanBot/1.0 (contact: " + USER_AGENT_CONTACT + ")"
+
 
 QPORTAL_PAYLOAD = {
     "startDate": "2026-10-04T13:30:08.221Z",
@@ -41,85 +46,63 @@ QPORTAL_PAYLOAD = {
     "projectTypeId": "constructionProject",
 }
 
-CACHE_FILE = "geocode_cache.json"
-NOMINATIM_DELAY = 1.1
-NOMINATIM_RETRIES = 2
-NOMINATIM_RETRY_PAUSE = 5
+GEOCODE_CACHE_FILE = "geocode_cache.json"
+BIN_CACHE_FILE     = "bin_cache.json"
+
+NOMINATIM_DELAY         = 1.1
+NOMINATIM_RETRIES       = 2
+NOMINATIM_RETRY_PAUSE   = 5
+
+DADATA_RETRIES          = 2
+DADATA_RETRY_PAUSE      = 3    # если словим 429 — ждём 3 сек
 
 # ============================================================
 # ФИЛЬТРЫ
 # ============================================================
-# Только "Новое строительство"
 NEW_CONSTRUCTION_LABEL = "новое строительство"
 
-# Ключевые слова для "жилой" категории объекта.
-# Если в constructionObjectCategoryName.ru встречается хотя бы одно —
-# считаем объект жилым.
 RESIDENTIAL_KEYWORDS = [
-    "жилой",
-    "жилые",
-    "жилых",
-    "жилое",
-    "жилая",
+    "жилой", "жилые", "жилых", "жилое", "жилая",
     "многоквартирн",
-    "многофункциональн",   # МЖК — тоже жильё; уберите, если нужны только чистые ЖК
+    "многофункциональн",
 ]
 
-# Ключевые слова-исключения: если попались — объект точно НЕ жилой.
-# Нужны как страховка, если "жилой" случайно есть в названии служебного объекта.
 NON_RESIDENTIAL_KEYWORDS = [
-    "сооружени",
-    "инженерн",
-    "сетей",
-    "сети ",
-    "электроснабжен",
-    "теплоснабжен",
-    "водоснабжен",
-    "водоотведен",
-    "канализац",
-    "котельн",
-    "гидротехническ",
-    "административны",
-    "транспорт",
-    "автомобильн",
-    # "паркинг",       # отдельный паркинг — не ЖК
-    "детский сад",   # отдельный садик
-    "школ",          # отдельная школа
-    "больниц",
-    "поликлиник",
+    "сооружени", "инженерн", "сетей", "сети ",
+    "электроснабжен", "теплоснабжен", "водоснабжен",
+    "водоотведен", "канализац", "котельн", "гидротехническ",
+    "административны", "транспорт", "паркинги",
+    "детский сад", "школ", "больниц", "поликлиник",
 ]
 
 
 def is_new_construction(it):
-    """True, если вид строительства = 'Новое строительство'."""
     ctype = (it.get("constructionTypeName") or {}).get("ru", "").strip().lower()
     return ctype == NEW_CONSTRUCTION_LABEL
 
 
 def is_residential(it):
-    """True, если категория объекта относится к жилью."""
     cat = (it.get("constructionObjectCategoryName") or {}).get("ru", "").lower()
     if not cat:
         return False
-
-    # Сначала проверяем исключения — они важнее
     if any(kw in cat for kw in NON_RESIDENTIAL_KEYWORDS):
         return False
-
-    # Затем — что есть хотя бы один жилой маркер
     return any(kw in cat for kw in RESIDENTIAL_KEYWORDS)
 
 
 # ============================================================
 # HTTP-ХЕЛПЕРЫ
 # ============================================================
-def _http_post_json(url, payload, timeout=60):
+def _http_post_json(url, payload, headers=None, timeout=60):
     body = json.dumps(payload).encode("utf-8")
-    req = Request(url, data=body, headers={
+    h = {
         "Content-Type": "application/json",
         "Accept": "application/json",
         "User-Agent": USER_AGENT,
-    }, method="POST")
+    }
+    if headers:
+        h.update(headers)
+    req = Request(url, data=body, headers=h, method="POST")
     with urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
@@ -163,6 +146,7 @@ def parse_kz_address(address):
         result["housenumber"] = house_match.group(1).strip()
 
     return result
+
 
 def _nominatim_geocode(address):
     """
@@ -208,44 +192,79 @@ def _nominatim_geocode(address):
             return float(hit["lat"]), float(hit["lon"]), hit.get("display_name", "")
         except HTTPError as e:
             if e.code == 429 and attempt < NOMINATIM_RETRIES:
-                print(f"   [nominatim] 429, ждём {NOMINATIM_RETRY_PAUSE} с")
                 time.sleep(NOMINATIM_RETRY_PAUSE)
                 continue
-            print(f"   [nominatim] HTTP ошибка: {e.code} {e.reason}")
             return None, None, None
-        except (URLError, json.JSONDecodeError) as e:
-            print(f"   [nominatim] ошибка: {e}")
+        except (URLError, json.JSONDecodeError):
             return None, None, None
-
     return None, None, None
 
 
+def _dadata_get_bin(customer_name):
+    """
+    Возвращает БИН по названию заказчика через DaData,
+    либо None, если не удалось найти.
+    """
+    if not customer_name or not customer_name.strip():
+        return None
+
+    # Ограничение API: query ≤ 300 символов
+    query = customer_name.strip()[:300]
+
+    headers = {
+        "Authorization": f"Token {DADATA_API_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    payload = {"query": query, "count": 1}
+
+    for attempt in range(DADATA_RETRIES + 1):
+        try:
+            data = _http_post_json(DADATA_SUGGEST_URL, payload,
+                                   headers=headers, timeout=15)
+            suggestions = data.get("suggestions") or []
+            if not suggestions:
+                return None
+            bin_val = (suggestions[0].get("data") or {}).get("bin")
+            return bin_val
+        except HTTPError as e:
+            if e.code == 429 and attempt < DADATA_RETRIES:
+                print(f"   [dadata] 429, ждём {DADATA_RETRY_PAUSE} с")
+                time.sleep(DADATA_RETRY_PAUSE)
+                continue
+            print(f"   [dadata] HTTP ошибка: {e.code} {e.reason}")
+            return None
+        except (URLError, json.JSONDecodeError) as e:
+            print(f"   [dadata] ошибка: {e}")
+            return None
+    return None
+
+
 # ============================================================
-# КЭШ ГЕОКОДИРОВАНИЯ
+# КЭШИ
 # ============================================================
-def _load_geocache():
-    if not os.path.exists(CACHE_FILE):
+def _load_json_cache(path):
+    if not os.path.exists(path):
         return {}
     try:
-        with open(CACHE_FILE, "r", encoding="utf-8") as f:
+        with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
     except (OSError, json.JSONDecodeError):
         return {}
 
 
-def _save_geocache(cache):
+def _save_json_cache(path, data):
     try:
-        with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump(cache, f, ensure_ascii=False, indent=2)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
     except OSError as e:
-        print(f"[cache] не удалось сохранить: {e}")
+        print(f"[cache] не удалось сохранить {path}: {e}")
 
 
 # ============================================================
 # НОРМАЛИЗАЦИЯ
 # ============================================================
-def _normalize_item(it, lat, lon, display):
-    """Превращает элемент qportal в объект для клиента."""
+def _normalize_item(it, lat, lon, display, customer_bin):
     pname = it.get("projectName") or {}
     loc   = it.get("location") or {}
     cust  = it.get("customerName") or {}
@@ -262,6 +281,7 @@ def _normalize_item(it, lat, lon, display):
         "lon": lon,
         "display_name": display,
         "customer": (cust.get("ru") or "").strip(),
+        "customer_bin": customer_bin,
         "designer": (des.get("ru") or "").strip(),
         "stage": (stage.get("ru") or "").strip(),
         "category": (cat.get("ru") or "").strip(),
@@ -269,17 +289,11 @@ def _normalize_item(it, lat, lon, display):
 
 
 def _fetch_raw_items():
-    """
-    Загружает список проектов и применяет два фильтра:
-      1. Новое строительство
-      2. Жилая категория объекта
-    """
     print("[qportal] Запрос списка ...")
     payload = _http_post_json(QPORTAL_SEARCH_URL, QPORTAL_PAYLOAD)
     items = payload.get("data", [])
     print(f"[qportal] Получено: {len(items)}")
 
-    # Счётчики для логов
     after_new = 0
     result = []
     rejected_categories = {}
@@ -288,22 +302,18 @@ def _fetch_raw_items():
         if not is_new_construction(it):
             continue
         after_new += 1
-
         if not is_residential(it):
             cat = (it.get("constructionObjectCategoryName") or {}).get("ru", "—")
             rejected_categories[cat] = rejected_categories.get(cat, 0) + 1
             continue
-
         result.append(it)
 
     print(f"[filter] После 'Новое строительство': {after_new}")
     print(f"[filter] После фильтра по категории:  {len(result)}")
-
     if rejected_categories:
         print("[filter] Отклонено по категории:")
         for cat, cnt in sorted(rejected_categories.items(), key=lambda x: -x[1]):
             print(f"         {cnt:>3} × {cat}")
-
     return result
 
 
@@ -311,7 +321,6 @@ def _fetch_raw_items():
 # СТРИМИНГ
 # ============================================================
 def stream_zhk():
-    """Генератор SSE-событий."""
     def sse(event, data):
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
@@ -324,28 +333,47 @@ def stream_zhk():
     total = len(items)
     yield sse("meta", {"total": total})
 
-    cache = _load_geocache()
+    geo_cache = _load_json_cache(GEOCODE_CACHE_FILE)
+    bin_cache = _load_json_cache(BIN_CACHE_FILE)
     shown = 0
 
     for i, it in enumerate(items):
         loc = it.get("location") or {}
         address = (loc.get("ru") or "").strip()
+        customer = ((it.get("customerName") or {}).get("ru") or "").strip()
 
-        cached = cache.get(address)
+        # --- Геокодирование ---
+        cached = geo_cache.get(address)
         if cached and len(cached) == 3 and cached[0] is not None:
             lat, lon, display = cached
         else:
-            yield sse("progress", {"index": i + 1, "total": total, "address": address[:80]})
+            yield sse("progress", {"index": i + 1, "total": total,
+                                   "address": address[:80], "stage": "geo"})
             lat, lon, display = _nominatim_geocode(address)
-            cache[address] = [lat, lon, display]
-            _save_geocache(cache)
+            geo_cache[address] = [lat, lon, display]
+            _save_json_cache(GEOCODE_CACHE_FILE, geo_cache)
             time.sleep(NOMINATIM_DELAY)
+
+        # --- Определение БИН заказчика ---
+        bin_val = None
+        if customer:
+            if customer in bin_cache:
+                bin_val = bin_cache[customer]
+            else:
+                yield sse("progress", {"index": i + 1, "total": total,
+                                       "address": customer[:80], "stage": "bin"})
+                bin_val = _dadata_get_bin(customer)
+                bin_cache[customer] = bin_val
+                _save_json_cache(BIN_CACHE_FILE, bin_cache)
+                # DaData лимит 30 запросов/сек — пауза не нужна,
+                # но ставим небольшую для вежливости
+                time.sleep(0.15)
 
         if lat is None or lon is None:
             yield sse("skip", {"index": i + 1, "address": address[:80]})
             continue
 
-        zhk = _normalize_item(it, lat, lon, display)
+        zhk = _normalize_item(it, lat, lon, display, bin_val)
         shown += 1
         yield sse("zhk", zhk)
 
@@ -353,23 +381,33 @@ def stream_zhk():
 
 
 def build_full_list():
-    """Синхронный вариант — для /api/zhk."""
     items = _fetch_raw_items()
-    cache = _load_geocache()
+    geo_cache = _load_json_cache(GEOCODE_CACHE_FILE)
+    bin_cache = _load_json_cache(BIN_CACHE_FILE)
     result = []
     for it in items:
         address = ((it.get("location") or {}).get("ru") or "").strip()
-        cached = cache.get(address)
+        customer = ((it.get("customerName") or {}).get("ru") or "").strip()
+
+        cached = geo_cache.get(address)
         if cached and len(cached) == 3 and cached[0] is not None:
             lat, lon, display = cached
         else:
             lat, lon, display = _nominatim_geocode(address)
-            cache[address] = [lat, lon, display]
-            _save_geocache(cache)
+            geo_cache[address] = [lat, lon, display]
+            _save_json_cache(GEOCODE_CACHE_FILE, geo_cache)
             time.sleep(NOMINATIM_DELAY)
+
+        bin_val = bin_cache.get(customer)
+        if bin_val is None and customer not in bin_cache:
+            bin_val = _dadata_get_bin(customer)
+            bin_cache[customer] = bin_val
+            _save_json_cache(BIN_CACHE_FILE, bin_cache)
+            time.sleep(0.15)
+
         if lat is None or lon is None:
             continue
-        result.append(_normalize_item(it, lat, lon, display))
+        result.append(_normalize_item(it, lat, lon, display, bin_val))
     return result
 
 
@@ -381,7 +419,6 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/api/zhk/stream":
             self._handle_stream()
             return
-
         if self.path == "/api/zhk":
             try:
                 data = build_full_list()
@@ -389,7 +426,6 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:
                 self._send_json(502, {"success": False, "message": str(e), "data": []})
             return
-
         return super().do_GET()
 
     def _handle_stream(self):
@@ -450,3 +486,4 @@ if __name__ == "__main__":
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nСервер остановлен.")
+

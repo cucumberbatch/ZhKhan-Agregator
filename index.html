@@ -11,79 +11,374 @@
           integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
           crossorigin="" />
     <style>
+        /* ============================================================
+           БАЗА
+           ============================================================ */
+        :root {
+            --bg:        #fafbfc;
+            --surface:   #ffffff;
+            --border:    #eef0f2;
+            --border-2:  #e3e6e9;
+            --text:      #1f2328;
+            --text-soft: #656d76;
+            --text-mute: #8c959f;
+            --accent:    #16a34a;   /* зелёный */
+            --accent-bg: #eaf7ee;
+            --shadow-sm: 0 1px 2px rgba(27,31,36,.04);
+            --shadow-md: 0 4px 14px rgba(27,31,36,.08);
+            --radius:    10px;
+        }
+
         * { box-sizing: border-box; }
-        html, body { margin: 0; padding: 0; height: 100%;
-                     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-                     color: #222; }
+        html, body {
+            margin: 0; padding: 0; height: 100%;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Inter", Roboto, "Helvetica Neue", sans-serif;
+            color: var(--text);
+            background: var(--bg);
+            -webkit-font-smoothing: antialiased;
+            font-size: 14px;
+            line-height: 1.45;
+        }
 
         #app { display: flex; height: 100vh; overflow: hidden; }
 
-        /* ---------- Левая панель ---------- */
-        #sidebar { width: 400px; min-width: 320px; max-width: 45vw;
-                   display: flex; flex-direction: column;
-                   border-right: 1px solid #e3e3e3; background: #fafafa; }
-        #sidebar header { padding: 14px 16px 10px; background: #fff;
-                          border-bottom: 1px solid #e3e3e3; }
-        #sidebar header h1 { margin: 0 0 8px; font-size: 16px; font-weight: 700; }
-        #sidebar header .meta { font-size: 12px; color: #777; }
-        #search { margin-top: 10px; width: 100%; padding: 8px 12px;
-                  border: 1px solid #ccc; border-radius: 6px; font-size: 13px; outline: none; }
-        #search:focus { border-color: #2e9e44; }
-        #list { flex: 1; overflow-y: auto; padding: 8px 10px; }
+        /* ============================================================
+           САЙДБАР
+           ============================================================ */
+        #sidebar {
+            width: 400px;
+            min-width: 320px;
+            max-width: 46vw;
+            display: flex;
+            flex-direction: column;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+        }
 
-        .card { background: #fff; border: 1px solid #e3e3e3; border-radius: 8px;
-                padding: 10px 12px; margin-bottom: 8px; cursor: pointer;
-                transition: box-shadow .15s, border-color .15s;
-                animation: cardIn .25s ease; }
-        @keyframes cardIn { from { opacity: 0; transform: translateY(-4px); }
-                            to   { opacity: 1; transform: translateY(0); } }
-        .card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.08); border-color: #c8c8c8; }
-        .card.active { border-color: #2e9e44; box-shadow: 0 0 0 2px rgba(46,158,68,.15); }
-        .card .title { font-size: 13px; font-weight: 700; line-height: 1.35; margin-bottom: 6px; }
-        .card .row { font-size: 12px; color: #555; margin-top: 2px; line-height: 1.4; }
-        .card .code { font-size: 11px; color: #999; margin-top: 6px; }
-        .card .btn-2gis { display: inline-block; margin-top: 8px; padding: 4px 8px;
-                          background: #00b956; color: #fff; border-radius: 4px;
-                          text-decoration: none; font-size: 11px; font-weight: 600; }
-        .card .btn-2gis:hover { background: #009a46; }
+        #sidebar header {
+            padding: 20px 20px 14px;
+            border-bottom: 1px solid var(--border);
+        }
+        #sidebar h1 {
+            margin: 0 0 4px;
+            font-size: 17px;
+            font-weight: 600;
+            letter-spacing: -.01em;
+        }
+        #sidebar .meta {
+            font-size: 12.5px;
+            color: var(--text-mute);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        #sidebar .meta .pill {
+            display: inline-block;
+            padding: 1px 8px;
+            background: var(--accent-bg);
+            color: var(--accent);
+            border-radius: 999px;
+            font-size: 11.5px;
+            font-weight: 600;
+        }
 
-        #empty { display: none; padding: 24px 16px; text-align: center;
-                 font-size: 13px; color: #999; }
+        /* Поиск */
+        .search-wrap { position: relative; margin-top: 14px; }
+        .search-wrap svg {
+            position: absolute; left: 11px; top: 50%;
+            transform: translateY(-50%);
+            width: 15px; height: 15px;
+            color: var(--text-mute);
+            pointer-events: none;
+        }
+        #search {
+            width: 100%;
+            padding: 9px 12px 9px 32px;
+            border: 1px solid var(--border-2);
+            border-radius: 8px;
+            font-size: 13px;
+            background: #fff;
+            outline: none;
+            transition: border-color .15s, box-shadow .15s;
+            color: var(--text);
+        }
+        #search::placeholder { color: var(--text-mute); }
+        #search:focus {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(22,163,74,.12);
+        }
 
-        /* ---------- Карта ---------- */
+        #list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 12px 12px 20px;
+        }
+
+        /* Скроллбар потоньше */
+        #list::-webkit-scrollbar { width: 8px; }
+        #list::-webkit-scrollbar-thumb {
+            background: #dde0e3; border-radius: 4px;
+            border: 2px solid var(--surface);
+        }
+        #list::-webkit-scrollbar-thumb:hover { background: #c7cbd0; }
+        #list::-webkit-scrollbar-track { background: transparent; }
+
+        /* ============================================================
+           КАРТОЧКА
+           ============================================================ */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            padding: 14px 16px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: border-color .15s, box-shadow .15s, transform .1s;
+            animation: cardIn .25s ease both;
+        }
+        @keyframes cardIn {
+            from { opacity: 0; transform: translateY(-3px); }
+            to   { opacity: 1; transform: translateY(0); }
+        }
+        .card:hover {
+            border-color: var(--border-2);
+            box-shadow: var(--shadow-md);
+        }
+        .card.active {
+            border-color: var(--accent);
+            box-shadow: 0 0 0 3px rgba(22,163,74,.10);
+        }
+
+        .card .title {
+            font-size: 13.5px;
+            font-weight: 600;
+            line-height: 1.4;
+            color: var(--text);
+            margin-bottom: 10px;
+            letter-spacing: -.005em;
+        }
+
+        /* ---------- Строка "label: value" ---------- */
+        .copy-row {
+            display: flex;
+            align-items: flex-start;
+            gap: 6px;
+            font-size: 12.5px;
+            color: var(--text-soft);
+            margin-top: 4px;
+            line-height: 1.45;
+        }
+        .copy-row .label {
+            flex: 0 0 auto;
+            color: var(--text-mute);
+            font-size: 12px;
+        }
+        .copy-row .value {
+            flex: 1 1 auto;
+            word-break: break-word;
+            color: var(--text);
+        }
+        .copy-row .copy-btn {
+            flex: 0 0 auto;
+            border: none;
+            background: transparent;
+            cursor: pointer;
+            padding: 2px 4px;
+            font-size: 12px;
+            color: var(--text-mute);
+            border-radius: 4px;
+            line-height: 1;
+            opacity: 0;
+            transition: opacity .12s, color .12s, background .12s;
+        }
+        .copy-row:hover .copy-btn { opacity: 1; }
+        .copy-row .copy-btn:hover {
+            color: var(--accent);
+            background: var(--accent-bg);
+        }
+        .copy-row .copy-btn.copied {
+            color: var(--accent);
+            opacity: 1;
+        }
+
+        .card .code {
+            font-size: 11px;
+            color: var(--text-mute);
+            margin-top: 8px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+        }
+
+        /* Строка с кнопкой маршрута и идентификатором проекта */   
+        .foot-row {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            margin-top: 12px;
+        }
+        .foot-row .code {
+            margin-top: 0;      /* убираем верхний отступ, он теперь у родителя */
+            flex: 1 1 auto;
+            min-width: 0;ма
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .foot-row .route-btn {
+            margin-top: 0;      /* убираем верхний отступ */
+            flex: 0 0 auto;
+        }
+
+        /* Кнопка "Маршрут" */
+        .route-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-top: 12px;
+            padding: 5px 11px;
+            background: var(--surface);
+            color: var(--accent);
+            border: 1px solid var(--accent);
+            border-radius: 999px;
+            text-decoration: none;
+            font-size: 11.5px;
+            font-weight: 600;
+            transition: background .15s, color .15s;
+        }
+        .route-btn:hover {
+            background: var(--accent);
+            color: #fff;
+        }
+        .route-btn svg { width: 11px; height: 11px; }
+
+        /* Пусто */
+        #empty {
+            display: none;
+            padding: 40px 20px;
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-mute);
+        }
+
+        /* ============================================================
+           КАРТА
+           ============================================================ */
         #map-wrap { flex: 1; position: relative; }
         #map { width: 100%; height: 100%; }
 
-        /* ---------- Индикатор загрузки ---------- */
-        #loader { position: fixed; inset: 0; display: flex; flex-direction: column;
-                  align-items: center; justify-content: center;
-                  background: rgba(255, 255, 255, 0.95); z-index: 10000;
-                  transition: opacity 0.3s ease; }
+        /* Leaflet popup в минималистичном стиле */
+        .leaflet-popup-content-wrapper {
+            border-radius: var(--radius);
+            box-shadow: var(--shadow-md);
+            border: 1px solid var(--border);
+        }
+        .leaflet-popup-content { margin: 14px 16px; font-size: 13px; }
+        .leaflet-popup-tip { box-shadow: none; }
+
+        /* ============================================================
+           LOADER
+           ============================================================ */
+        #loader {
+            position: fixed; inset: 0;
+            display: flex; flex-direction: column;
+            align-items: center; justify-content: center;
+            background: rgba(250, 251, 252, 0.96);
+            z-index: 10000;
+            transition: opacity 0.3s ease;
+        }
         #loader.hidden { opacity: 0; pointer-events: none; }
-        #loader .spinner { width: 56px; height: 56px; border: 5px solid #e3e3e3;
-                           border-top-color: #2e9e44; border-radius: 50%;
-                           animation: spin 0.9s linear infinite; }
-        #loader .title { margin-top: 18px; font-size: 18px; font-weight: 600; }
-        #loader .subtitle { margin-top: 8px; font-size: 13px; color: #666;
-                            max-width: 480px; text-align: center; }
-        #loader .progress-wrap { margin-top: 16px; width: 320px; height: 6px;
-                                 background: #e3e3e3; border-radius: 3px; overflow: hidden; }
-        #loader .progress-bar { width: 0%; height: 100%; background: #2e9e44;
-                                transition: width .25s ease; }
-        #loader .progress-text { margin-top: 10px; font-size: 13px; color: #555; }
+        #loader .spinner {
+            width: 40px; height: 40px;
+            border: 3px solid var(--border-2);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.9s linear infinite;
+        }
+        #loader .title {
+            margin-top: 20px;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text);
+        }
+        #loader .subtitle {
+            margin-top: 6px;
+            font-size: 12.5px;
+            color: var(--text-soft);
+            max-width: 420px;
+            text-align: center;
+        }
+        #loader .progress-wrap {
+            margin-top: 18px;
+            width: 280px; height: 4px;
+            background: var(--border-2);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        #loader .progress-bar {
+            width: 0%; height: 100%;
+            background: var(--accent);
+            transition: width .25s ease;
+        }
+        #loader .progress-text {
+            margin-top: 8px;
+            font-size: 12px;
+            color: var(--text-mute);
+            font-variant-numeric: tabular-nums;
+        }
         #loader.error .spinner { display: none; }
-        #loader.error .progress-wrap, #loader.error .progress-text { display: none; }
-        #loader.error .title { color: #d63b3b; }
-        #loader .error-msg { display: none; margin-top: 10px; max-width: 460px;
-                             text-align: center; font-size: 13px; color: #666; }
+        #loader.error .progress-wrap,
+        #loader.error .progress-text { display: none; }
+        #loader.error .title { color: #dc2626; }
+        #loader .error-msg {
+            display: none;
+            margin-top: 10px;
+            max-width: 420px;
+            text-align: center;
+            font-size: 12.5px;
+            color: var(--text-soft);
+        }
         #loader.error .error-msg { display: block; }
+
         @keyframes spin { to { transform: rotate(360deg); } }
 
+        /* ============================================================
+           TOAST
+           ============================================================ */
+        #toast {
+            position: fixed;
+            left: 50%; bottom: 24px;
+            transform: translateX(-50%) translateY(20px);
+            background: #1f2328;
+            color: #fff;
+            padding: 9px 16px;
+            border-radius: 8px;
+            font-size: 12.5px;
+            font-weight: 500;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .2s, transform .2s;
+            z-index: 20000;
+            box-shadow: var(--shadow-md);
+        }
+        #toast.show {
+            opacity: 1;
+            transform: translateX(-50%) translateY(0);
+        }
+
+        /* ============================================================
+           АДАПТИВ
+           ============================================================ */
         @media (max-width: 720px) {
             #app { flex-direction: column; }
-            #sidebar { width: 100%; max-width: 100%; height: 45vh; border-right: none;
-                       border-bottom: 1px solid #e3e3e3; }
-            #map-wrap { height: 55vh; }
+            #sidebar {
+                width: 100%;
+                max-width: 100%;
+                height: 48vh;
+                border-right: none;
+                border-bottom: 1px solid var(--border);
+            }
+            #map-wrap { height: 52vh; }
+            .copy-row .copy-btn { opacity: 1; }  /* на тач-устройствах всегда видны */
         }
     </style>
 </head>
@@ -94,9 +389,19 @@
             <header>
                 <h1>Новое строительство — Астана</h1>
                 <div class="meta">
-                    Показано <span id="cnt">0</span> из <span id="cnt-total">0</span>
+                    <span class="pill"><span id="cnt">0</span> из <span id="cnt-total">0</span></span>
+                    <span>ЖК после фильтрации</span>
                 </div>
-                <input id="search" type="search" placeholder="Поиск по названию, адресу, заказчику…">
+
+                <div class="search-wrap">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="11" cy="11" r="7"/>
+                        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                    </svg>
+                    <input id="search" type="search"
+                           placeholder="Поиск по названию, адресу, заказчику…">
+                </div>
             </header>
             <div id="list"></div>
             <div id="empty">Ничего не найдено</div>
@@ -115,6 +420,9 @@
         <div class="error-msg" id="loader-error"></div>
     </div>
 
+    <!-- Toast -->
+    <div id="toast">Скопировано</div>
+
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
             crossorigin=""></script>
@@ -123,12 +431,12 @@
         // ============================================================
         // 0. Loader
         // ============================================================
-        const loader        = document.getElementById('loader');
-        const loaderTitle   = loader.querySelector('.title');
-        const loaderSub     = document.getElementById('loader-subtitle');
-        const progressBar   = document.getElementById('progress-bar');
-        const progressText  = document.getElementById('progress-text');
-        const loaderError   = document.getElementById('loader-error');
+        const loader       = document.getElementById('loader');
+        const loaderTitle  = loader.querySelector('.title');
+        const loaderSub    = document.getElementById('loader-subtitle');
+        const progressBar  = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const loaderError  = document.getElementById('loader-error');
 
         function hideLoader() { loader.classList.add('hidden'); }
         function failLoader(msg) {
@@ -148,8 +456,11 @@
         // 1. Карта
         // ============================================================
         const map = L.map('map', {
-            updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 2
+            updateWhenIdle: true, updateWhenZooming: false, keepBuffer: 2,
+            zoomControl: false
         }).setView([51.128, 71.430], 11);
+
+        L.control.zoom({ position: 'bottomright' }).addTo(map);
 
         L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
@@ -168,9 +479,9 @@
         // ============================================================
         // 2. Данные
         // ============================================================
-        const zhkList    = [];               // все ЖК
-        const markersById = new Map();       // id → { marker, zhk }
-        const cardsById   = new Map();       // id → DOM-элемент
+        const zhkList     = [];
+        const markersById = new Map();
+        const cardsById   = new Map();
 
         const listEl     = document.getElementById('list');
         const emptyEl    = document.getElementById('empty');
@@ -186,34 +497,114 @@
                 '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
             }[ch]));
         }
+
+        function cutTail(s) {
+            return s.replace(/,? (расположенный )?по адресу:?.*/g, "");
+        }
+
         function route2gisUrl(zhk) {
             return `https://2gis.ru/directions/points/%7C${zhk.lon},${zhk.lat}`;
         }
+
+        // === Toast + Clipboard ===
+        const toastEl = document.getElementById('toast');
+        let toastTimer = null;
+
+        function showToast(text) {
+            toastEl.textContent = text || 'Скопировано';
+            toastEl.classList.add('show');
+            clearTimeout(toastTimer);
+            toastTimer = setTimeout(() => toastEl.classList.remove('show'), 1400);
+        }
+
+        document.addEventListener('click', async (e) => {
+            const btn = e.target.closest('.copy-btn');
+            if (!btn) return;
+            e.stopPropagation();
+            e.preventDefault();
+
+            const text = btn.dataset.copy || '';
+            if (!text) return;
+
+            try {
+                if (navigator.clipboard && window.isSecureContext) {
+                    await navigator.clipboard.writeText(text);
+                } else {
+                    const ta = document.createElement('textarea');
+                    ta.value = text;
+                    ta.style.position = 'fixed';
+                    ta.style.opacity = '0';
+                    document.body.appendChild(ta);
+                    ta.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(ta);
+                }
+                btn.classList.add('copied');
+                btn.textContent = '✓';
+                setTimeout(() => {
+                    btn.classList.remove('copied');
+                    btn.textContent = '⧉';
+                }, 1200);
+                showToast('Скопировано: ' + (text.length > 40 ? text.slice(0,40) + '…' : text));
+            } catch (err) {
+                console.error('Не удалось скопировать:', err);
+                showToast('Ошибка копирования');
+            }
+        });
+
+        function copyRow(label, value) {
+            if (!value) return '';
+            const v = escapeHtml(value);
+            const raw = escapeHtml(value).replace(/'/g, '&#39;');
+            return `
+                <div class="copy-row">
+                    <span class="label">${label}</span>
+                    <span class="value">${v}</span>
+                    <button class="copy-btn" type="button"
+                            title="Скопировать"
+                            data-copy="${raw}">⧉</button>
+                </div>`;
+        }
+
+        const ROUTE_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                                <line x1="5" y1="12" x2="19" y2="12"/>
+                                <polyline points="12 5 19 12 12 19"/>
+                           </svg>`;
+
         function popupHtml(zhk) {
             return `
                 <div class="zhk-popup">
-                    <b>${escapeHtml(zhk.name) || '—'}</b>
-                    ${zhk.address  ? `<div class="row">📍 ${escapeHtml(zhk.address)}</div>` : ''}
-                    ${zhk.customer ? `<div class="row">🏗 ${escapeHtml(zhk.customer)}</div>` : ''}
-                    ${zhk.designer ? `<div class="row">✏️ ${escapeHtml(zhk.designer)}</div>` : ''}
-                    ${zhk.code     ? `<div class="row">🔖 ${escapeHtml(zhk.code)}</div>` : ''}
-                    <div class="badge">Новое строительство</div>
-                    <div><a class="btn-2gis" target="_blank" href="${route2gisUrl(zhk)}">🚗 Маршрут в 2ГИС</a></div>
+                    <b>${escapeHtml(cutTail(zhk.name)) || '—'}</b>
+                    ${copyRow('Адрес:', zhk.address)}
+                    ${copyRow('Заказчик:', zhk.customer)}
+                    ${zhk.customer_bin ? copyRow('БИН:', zhk.customer_bin) : ''}
+                    <div class="foot-row">
+                        <span class="code">${escapeHtml(zhk.code) || ''}</span>
+                        <a class="route-btn" target="_blank" href="${route2gisUrl(zhk)}">
+                            ${ROUTE_SVG} Маршрут
+                        </a>
+                    </div>
                 </div>`;
         }
+        
         function cardHtml(zhk) {
             const route = route2gisUrl(zhk);
             return `
-                <div class="title">${escapeHtml(zhk.name) || '—'}</div>
-                ${zhk.address  ? `<div class="row">📍 ${escapeHtml(zhk.address)}</div>` : ''}
-                ${zhk.customer ? `<div class="row">🏗 ${escapeHtml(zhk.customer)}</div>` : ''}
-                ${zhk.designer ? `<div class="row">✏️ ${escapeHtml(zhk.designer)}</div>` : ''}
-                ${zhk.code     ? `<div class="code">${escapeHtml(zhk.code)}</div>` : ''}
-                <a class="btn-2gis" target="_blank"
-                   href="${route}"
-                   onclick="event.stopPropagation()">🚗 2ГИС</a>`;
+                <div class="title">${escapeHtml(cutTail(zhk.name)) || '—'}</div>
+                ${copyRow('Адрес:', zhk.address)}
+                ${copyRow('Заказчик:', zhk.customer)}
+                ${zhk.customer_bin ? copyRow('БИН:', zhk.customer_bin) : ''}
+                <div class="foot-row">
+                    <span class="code">${escapeHtml(zhk.code) || ''}</span>
+                    <a class="route-btn" target="_blank"
+                       href="${route}"
+                       onclick="event.stopPropagation()">
+                        ${ROUTE_SVG} Маршрут
+                    </a>
+                </div>`;
         }
-
+        
         // ============================================================
         // 4. Связка карта ↔ список
         // ============================================================
@@ -239,10 +630,9 @@
         }
 
         // ============================================================
-        // 5. Добавление одного ЖК на карту и в список
+        // 5. Добавление ЖК
         // ============================================================
         function addZhkToUI(zhk) {
-            // Маркер
             const marker = L.marker([zhk.lat, zhk.lon], { icon: greenIcon });
             marker.bindPopup(popupHtml(zhk));
             marker.on('click', () => {
@@ -252,28 +642,26 @@
             marker.addTo(map);
             markersById.set(zhk.id, { marker, zhk });
 
-            // Карточка
             const card = document.createElement('div');
             card.className = 'card';
             card.dataset.id = zhk.id;
             card.innerHTML = cardHtml(zhk);
-            card.addEventListener('click', () => focusOnZhk(zhk.id));
-
-            // Вставляем в начало списка, чтобы свежее было видно
+            card.addEventListener('click', (e) => {
+                if (e.target.closest('.copy-btn')) return;
+                if (e.target.closest('.route-btn')) return;
+                focusOnZhk(zhk.id);
+            });
             listEl.appendChild(card);
             cardsById.set(zhk.id, card);
 
-            // Обновляем счётчик
             cntEl.textContent = zhkList.length + 1;
 
-            // Карта расширяется под новые точки (плавно)
-            // Делаем это только для первых 3-х, чтобы не дёргаться
             if (zhkList.length < 3) {
                 const bounds = [];
                 markersById.forEach(({ marker }) => bounds.push(marker.getLatLng()));
                 if (bounds.length >= 2) {
                     map.fitBounds(L.latLngBounds(bounds), { padding: [30, 30], animate: true });
-                } else {
+                } else if (bounds.length === 1) {
                     map.setView(bounds[0], 13, { animate: true });
                 }
             }
@@ -294,6 +682,7 @@
                     (zhk.name || '').toLowerCase().includes(q) ||
                     (zhk.address || '').toLowerCase().includes(q) ||
                     (zhk.customer || '').toLowerCase().includes(q) ||
+                    (zhk.customer_bin || '').toLowerCase().includes(q) ||
                     (zhk.designer || '').toLowerCase().includes(q) ||
                     (zhk.code || '').toLowerCase().includes(q);
 
@@ -315,7 +704,7 @@
         searchEl.addEventListener('input', applyFilter);
 
         // ============================================================
-        // 7. SSE-стриминг
+        // 7. SSE
         // ============================================================
         const es = new EventSource('/api/zhk/stream');
         let total = 0;
@@ -324,15 +713,14 @@
             const data = JSON.parse(e.data);
             total = data.total;
             cntTotalEl.textContent = total;
-            updateProgress(0, total, `Найдено ${total} объектов. Начинаем геокодирование…`);
-            // Скрываем оверлей, как только пришли метаданные —
-            // список и карта уже будут наполняться постепенно
+            updateProgress(0, total, `Найдено ${total} объектов. Начинаем обработку…`);
             hideLoader();
         });
 
         es.addEventListener('progress', e => {
             const data = JSON.parse(e.data);
-            updateProgress(data.index, data.total, `Геокодируем: ${data.address}…`);
+            const stage = data.stage === 'bin' ? 'Определяем БИН: ' : 'Геокодируем: ';
+            updateProgress(data.index, data.total, `${stage}${data.address}…`);
         });
 
         es.addEventListener('zhk', e => {
@@ -343,7 +731,6 @@
         });
 
         es.addEventListener('skip', e => {
-            // Один адрес не найден — просто двигаем прогресс
             const data = JSON.parse(e.data);
             updateProgress(data.index, data.total, null);
         });
@@ -355,8 +742,6 @@
         });
 
         es.addEventListener('error', e => {
-            // SSE-ошибка: либо сервер прислал error-событие,
-            // либо соединение оборвалось. Пытаемся закрыть красиво.
             if (e.data) {
                 try {
                     const data = JSON.parse(e.data);
