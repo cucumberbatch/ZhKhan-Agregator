@@ -1,282 +1,376 @@
 #!/usr/bin/env python3
 """
-HTTP-сервер:
-1. Отдаёт статику (index.html).
-2. /api/zhk — список строящихся ЖК с датами начала и сдачи.
-   Данные берутся из двух эндпоинтов homeportal.kz:
-     - POST /api/v1/getobjects       — список ID
-     - GET  /api/v1/objects-detail/{id} — детали каждого объекта
-   Результат кэшируется в память и на диск.
+HTTP-сервер со стримингом ЖК через SSE:
+- /                    → index.html
+- /api/zhk             → весь список сразу (для отладки)
+- /api/zhk/stream      → SSE-поток: meta → zhk* → done
+
+Фильтры:
+1. constructionTypeName.ru == "Новое строительство"
+2. constructionObjectCategoryName.ru содержит одно из ключевых слов жилья
 """
 
 import json
 import os
+import re
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, date
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
 
-
 # ============================================================
-# КОНФИГУРАЦИЯ
+# КОНФИГ
 # ============================================================
-HOMEPORTAL_LIST_URL   = "https://api.homeportal.kz/api/v1/getobjects"
-HOMEPORTAL_DETAIL_URL = "https://api.homeportal.kz/api/v1/objects-detail/{id}"
+QPORTAL_SEARCH_URL = "https://gateway.qportal.kz/api/main/ProjectRegistry/search"
+NOMINATIM_URL      = "https://nominatim.openstreetmap.org/search"
 
-HOMEPORTAL_PAYLOAD = {
-    "authority": "",
-    "city_id": 12,          # Астана
-    "is_paginate": False,
-    "region_id": 1,
-    "search": "",
-    "build_status": "2",
-    "status": "2,3",
+# ЗАМЕНИТЕ на свой email — требование политики Nominatim
+USER_AGENT = "ZhkMapBot/1.0 (contact: ultraresonance@gmail.com)"
+
+QPORTAL_PAYLOAD = {
+    "startDate": "2026-10-04T13:30:08.221Z",
+    "userLanguage": "ru",
+    "skip": 0,
+    "take": 500,
+    "sortBy": None,
+    "sortDesc": False,
+    "location": "Астана",
+    "constructionTypeId": None,
+    "projectName": "многоквартирный жилой комплекс",
+    "projectTypeId": "constructionProject",
 }
 
-CACHE_TTL_SECONDS = 600         # 10 минут — память
-CACHE_FILE        = "cache.json"  # кэш на диск
-MAX_WORKERS       = 10            # параллельных запросов к деталям
+CACHE_FILE = "geocode_cache.json"
+NOMINATIM_DELAY = 1.1
+NOMINATIM_RETRIES = 2
+NOMINATIM_RETRY_PAUSE = 5
 
-_memory_cache = {"data": None, "timestamp": 0}
+# ============================================================
+# ФИЛЬТРЫ
+# ============================================================
+# Только "Новое строительство"
+NEW_CONSTRUCTION_LABEL = "новое строительство"
+
+# Ключевые слова для "жилой" категории объекта.
+# Если в constructionObjectCategoryName.ru встречается хотя бы одно —
+# считаем объект жилым.
+RESIDENTIAL_KEYWORDS = [
+    "жилой",
+    "жилые",
+    "жилых",
+    "жилое",
+    "жилая",
+    "многоквартирн",
+    "многофункциональн",   # МЖК — тоже жильё; уберите, если нужны только чистые ЖК
+]
+
+# Ключевые слова-исключения: если попались — объект точно НЕ жилой.
+# Нужны как страховка, если "жилой" случайно есть в названии служебного объекта.
+NON_RESIDENTIAL_KEYWORDS = [
+    "сооружени",
+    "инженерн",
+    "сетей",
+    "сети ",
+    "электроснабжен",
+    "теплоснабжен",
+    "водоснабжен",
+    "водоотведен",
+    "канализац",
+    "котельн",
+    "гидротехническ",
+    "административны",
+    "транспорт",
+    "автомобильн",
+    # "паркинг",       # отдельный паркинг — не ЖК
+    "детский сад",   # отдельный садик
+    "школ",          # отдельная школа
+    "больниц",
+    "поликлиник",
+]
+
+
+def is_new_construction(it):
+    """True, если вид строительства = 'Новое строительство'."""
+    ctype = (it.get("constructionTypeName") or {}).get("ru", "").strip().lower()
+    return ctype == NEW_CONSTRUCTION_LABEL
+
+
+def is_residential(it):
+    """True, если категория объекта относится к жилью."""
+    cat = (it.get("constructionObjectCategoryName") or {}).get("ru", "").lower()
+    if not cat:
+        return False
+
+    # Сначала проверяем исключения — они важнее
+    if any(kw in cat for kw in NON_RESIDENTIAL_KEYWORDS):
+        return False
+
+    # Затем — что есть хотя бы один жилой маркер
+    return any(kw in cat for kw in RESIDENTIAL_KEYWORDS)
 
 
 # ============================================================
-# HTTP-ПОМОЩНИКИ
+# HTTP-ХЕЛПЕРЫ
 # ============================================================
-def _http_post_json(url, payload, timeout=20):
+def _http_post_json(url, payload, timeout=60):
     body = json.dumps(payload).encode("utf-8")
-    req = Request(
-        url,
-        data=body,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (compatible; ZhkMapBot/1.0)",
-            "Referer": "https://homeportal.kz/",
-        },
-        method="POST",
-    )
+    req = Request(url, data=body, headers={
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": USER_AGENT,
+    }, method="POST")
     with urlopen(req, timeout=timeout) as resp:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _http_get_json(url, timeout=20):
-    req = Request(
-        url,
-        headers={
-            "Accept": "application/json",
-            "User-Agent": "Mozilla/5.0 (compatible; ZhkMapBot/1.0)",
-            "Referer": "https://homeportal.kz/",
-        },
-        method="GET",
-    )
-    with urlopen(req, timeout=timeout) as resp:
-        return json.loads(resp.read().decode("utf-8"))
-
-
-# ============================================================
-# РАЗБОР ДАТ
-# ============================================================
-def _parse_date(s):
-    """'23.09.2025' → datetime.date. Иначе None."""
-    if not s:
-        return None
-    try:
-        return datetime.strptime(s, "%d.%m.%Y").date()
-    except (ValueError, TypeError):
-        return None
-
-
-def _compute_status(start, end, today=None):
+# Регулярки для извлечения компонентов из адреса вида
+# "Республика Казахстан, город Астана, район Нұра, проспект Тұран"
+# или "...улица Е 429"
+def parse_kz_address(address):
     """
-    Возвращает словарь:
-      {
-        "color": "gray" | "green" | "orange" | "red" | "black",
-        "months_left": int | None,
-        "months_passed": int | None,
-        "phase": str,   # человекочитаемая фаза
-      }
+    Разбирает казахстанский адрес на компоненты.
+    Возвращает dict: {country, city, street, housenumber}
     """
-    today = today or date.today()
-    result = {"color": "gray", "months_left": None,
-              "months_passed": None, "phase": "нет данных"}
-
-    if not start and not end:
-        return result
-
-    if start and today < start:
-        # Стройка ещё не началась
-        result["color"] = "gray"
-        result["phase"] = "не начато"
-        return result
-
-    if start:
-        result["months_passed"] = (today.year - start.year) * 12 + (today.month - start.month)
-
-    if not end:
-        result["color"] = "orange"
-        result["phase"] = "строится"
-        return result
-
-    if today > end:
-        result["color"] = "black"
-        result["phase"] = "просрочено"
-        return result
-
-    months_left = (end.year - today.year) * 12 + (end.month - today.month)
-    result["months_left"] = months_left
-
-    if months_left <= 6:
-        result["color"] = "red"
-        result["phase"] = "скоро сдача"
-    elif months_left <= 18:
-        result["color"] = "orange"
-        result["phase"] = "в процессе"
-    else:
-        result["color"] = "green"
-        result["phase"] = "начальная стадия"
-
-    return result
-
-
-# ============================================================
-# ЗАГРУЗКА СПИСКА + ДЕТАЛЕЙ
-# ============================================================
-def _fetch_ids():
-    """Возвращает список (id, name) для детальной загрузки."""
-    payload = _http_post_json(HOMEPORTAL_LIST_URL, HOMEPORTAL_PAYLOAD)
-    objects = (payload.get("data", {})
-                      .get("objects", {})
-                      .get("data", []))
-    result = []
-    for obj in objects:
-        oid = obj.get("id")
-        if oid is not None:
-            result.append(oid)
-    return result
-
-
-def _fetch_detail(oid):
-    """Загружает детали одного объекта. Возвращает нормализованный dict или None."""
-    try:
-        payload = _http_get_json(HOMEPORTAL_DETAIL_URL.format(id=oid))
-    except (HTTPError, URLError, json.JSONDecodeError) as e:
-        print(f"[detail {oid}] ошибка: {e}")
-        return None
-
-    data = payload.get("data") or {}
-    basic    = data.get("basicData") or {}
-    location = data.get("locationData") or {}
-    dev      = (data.get("companyData") or {}).get("developerData") or {}
-
-    lat, lon = location.get("latitude"), location.get("longitude")
-    if not lat or not lon:
-        return None
-    try:
-        lat_f, lon_f = float(lat), float(lon)
-    except (TypeError, ValueError):
-        return None
-
-    start = _parse_date(basic.get("start_date"))
-    end   = _parse_date(basic.get("commissioning_date"))
-    status_info = _compute_status(start, end)
-
-    # authority приходит как объект {"id":..., "name":...}
-    authority = basic.get("authority") or {}
-    authority_name = authority.get("name") if isinstance(authority, dict) else authority
-
-    return {
-        "id": oid,
-        "name": basic.get("name") or "—",
-        "developer": dev.get("name") or "—",
-        "address": basic.get("address") or "—",
-        "lat": lat_f,
-        "lon": lon_f,
-        "authority": authority_name,
-        "start_date": start.isoformat() if start else None,
-        "end_date": end.isoformat() if end else None,
-        "start_date_display": start.strftime("%d.%m.%Y") if start else None,
-        "end_date_display":   end.strftime("%d.%m.%Y")   if end else None,
-        # Готовые для клиента поля статуса:
-        "phase": status_info["phase"],
-        "color": status_info["color"],
-        "months_left": status_info["months_left"],
-        "months_passed": status_info["months_passed"],
-        "construction_progress": basic.get("construction_progress"),
+    result = {
+        "country": "Казахстан",
+        "city": "Астана",
+        "street": None,
+        "housenumber": None,
     }
 
+    if not address:
+        return result
 
-def fetch_zhk_full():
-    """Полный цикл: список + детали (параллельно). Возвращает список ЖК."""
-    print("[api] Загружаем список ID ...")
-    ids = _fetch_ids()
-    print(f"[api] Получено ID: {len(ids)}")
+    # Убираем "Республика Казахстан", "город", "район ..." — они не нужны
+    # Nominatim ищет по стране/городу/улице
 
-    results = []
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as pool:
-        futures = {pool.submit(_fetch_detail, oid): oid for oid in ids}
-        for fut in as_completed(futures):
-            item = fut.result()
-            if item:
-                results.append(item)
+    # Улица: ищем "улица <название>" или "проспект <название>"
+    # Форматы: "улица Е 429", "проспект Тұран", "ул. Ш. Қалдаяқов"
+    street_match = re.search(
+        r'(?:улица|ул\.?|проспект|пр\.?|шоссе|пер\.?)\s+([^,]+)',
+        address, re.IGNORECASE
+    )
+    if street_match:
+        result["street"] = street_match.group(1).strip()
 
-    # Сортируем по имени для стабильного порядка
-    results.sort(key=lambda x: x["name"])
-    print(f"[api] Успешно обработано: {len(results)}")
-    return results
+    # Номер дома: "дом 30/1", "д. 17/1", "уч. 10", "участок 42"
+    house_match = re.search(
+        r'(?:дом|д\.|уч\.?|участок)\s*(\d+(?:/\d+)?[А-Яа-я]?)',
+        address, re.IGNORECASE
+    )
+    if house_match:
+        result["housenumber"] = house_match.group(1).strip()
+
+    return result
+
+def _nominatim_geocode(address):
+    """
+    Структурированный запрос к Nominatim.
+    Точнее и быстрее, чем свободный q=.
+    """
+    if not address or not address.strip():
+        return None, None, None
+
+    parsed = parse_kz_address(address)
+
+    # Формируем параметры
+    params = {
+        "format": "json",
+        "limit": 1,
+        "addressdetails": 1,
+        "countrycodes": "kz",          # Только Казахстан — сильно повышает точность
+    }
+
+    # Если извлекли улицу — используем structured query
+    if parsed["street"]:
+        # street для Nominatim = "<housenumber> <streetname>"[citation:1]
+        if parsed["housenumber"]:
+            params["street"] = f"{parsed['housenumber']} {parsed['street']}"
+        else:
+            params["street"] = parsed["street"]
+        params["city"] = parsed["city"]
+        # countrycodes достаточно, country не обязателен
+    else:
+        # Fallback: свободный запрос, но с countrycodes
+        params["q"] = address
+
+    url = NOMINATIM_URL + "?" + urlencode(params)
+    req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
+
+    for attempt in range(NOMINATIM_RETRIES + 1):
+        try:
+            with urlopen(req, timeout=20) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            if not data:
+                return None, None, None
+            hit = data[0]
+            return float(hit["lat"]), float(hit["lon"]), hit.get("display_name", "")
+        except HTTPError as e:
+            if e.code == 429 and attempt < NOMINATIM_RETRIES:
+                print(f"   [nominatim] 429, ждём {NOMINATIM_RETRY_PAUSE} с")
+                time.sleep(NOMINATIM_RETRY_PAUSE)
+                continue
+            print(f"   [nominatim] HTTP ошибка: {e.code} {e.reason}")
+            return None, None, None
+        except (URLError, json.JSONDecodeError) as e:
+            print(f"   [nominatim] ошибка: {e}")
+            return None, None, None
+
+    return None, None, None
 
 
 # ============================================================
-# КЭШ (память + диск)
+# КЭШ ГЕОКОДИРОВАНИЯ
 # ============================================================
-def _load_disk_cache():
+def _load_geocache():
     if not os.path.exists(CACHE_FILE):
-        return None
+        return {}
     try:
         with open(CACHE_FILE, "r", encoding="utf-8") as f:
-            obj = json.load(f)
-        if time.time() - obj.get("timestamp", 0) < CACHE_TTL_SECONDS:
-            return obj
+            return json.load(f)
     except (OSError, json.JSONDecodeError):
-        pass
-    return None
+        return {}
 
 
-def _save_disk_cache(data):
+def _save_geocache(cache):
     try:
         with open(CACHE_FILE, "w", encoding="utf-8") as f:
-            json.dump({"timestamp": time.time(), "data": data},
-                      f, ensure_ascii=False)
+            json.dump(cache, f, ensure_ascii=False, indent=2)
     except OSError as e:
         print(f"[cache] не удалось сохранить: {e}")
 
 
-def get_zhk(force_refresh=False):
-    """Возвращает список ЖК из памяти / диска / сети."""
-    now = time.time()
+# ============================================================
+# НОРМАЛИЗАЦИЯ
+# ============================================================
+def _normalize_item(it, lat, lon, display):
+    """Превращает элемент qportal в объект для клиента."""
+    pname = it.get("projectName") or {}
+    loc   = it.get("location") or {}
+    cust  = it.get("customerName") or {}
+    des   = it.get("designerName") or {}
+    stage = it.get("projectStageName") or {}
+    cat   = it.get("constructionObjectCategoryName") or {}
 
-    if not force_refresh and _memory_cache["data"] is not None:
-        age = now - _memory_cache["timestamp"]
-        if age < CACHE_TTL_SECONDS:
-            print(f"[cache] память (возраст {int(age)} с)")
-            return _memory_cache["data"]
+    return {
+        "id": it.get("projectId"),
+        "code": it.get("projectCode"),
+        "name": (pname.get("ru") or "").strip(),
+        "address": (loc.get("ru") or "").strip(),
+        "lat": lat,
+        "lon": lon,
+        "display_name": display,
+        "customer": (cust.get("ru") or "").strip(),
+        "designer": (des.get("ru") or "").strip(),
+        "stage": (stage.get("ru") or "").strip(),
+        "category": (cat.get("ru") or "").strip(),
+    }
 
-    if not force_refresh:
-        disk = _load_disk_cache()
-        if disk:
-            print(f"[cache] диск (возраст {int(now - disk['timestamp'])} с)")
-            _memory_cache["data"] = disk["data"]
-            _memory_cache["timestamp"] = disk["timestamp"]
-            return disk["data"]
 
-    # Загружаем из сети
-    data = fetch_zhk_full()
-    _memory_cache["data"] = data
-    _memory_cache["timestamp"] = now
-    _save_disk_cache(data)
-    return data
+def _fetch_raw_items():
+    """
+    Загружает список проектов и применяет два фильтра:
+      1. Новое строительство
+      2. Жилая категория объекта
+    """
+    print("[qportal] Запрос списка ...")
+    payload = _http_post_json(QPORTAL_SEARCH_URL, QPORTAL_PAYLOAD)
+    items = payload.get("data", [])
+    print(f"[qportal] Получено: {len(items)}")
+
+    # Счётчики для логов
+    after_new = 0
+    result = []
+    rejected_categories = {}
+
+    for it in items:
+        if not is_new_construction(it):
+            continue
+        after_new += 1
+
+        if not is_residential(it):
+            cat = (it.get("constructionObjectCategoryName") or {}).get("ru", "—")
+            rejected_categories[cat] = rejected_categories.get(cat, 0) + 1
+            continue
+
+        result.append(it)
+
+    print(f"[filter] После 'Новое строительство': {after_new}")
+    print(f"[filter] После фильтра по категории:  {len(result)}")
+
+    if rejected_categories:
+        print("[filter] Отклонено по категории:")
+        for cat, cnt in sorted(rejected_categories.items(), key=lambda x: -x[1]):
+            print(f"         {cnt:>3} × {cat}")
+
+    return result
+
+
+# ============================================================
+# СТРИМИНГ
+# ============================================================
+def stream_zhk():
+    """Генератор SSE-событий."""
+    def sse(event, data):
+        return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+    try:
+        items = _fetch_raw_items()
+    except Exception as e:
+        yield sse("error", {"message": f"Ошибка qportal: {e}"})
+        return
+
+    total = len(items)
+    yield sse("meta", {"total": total})
+
+    cache = _load_geocache()
+    shown = 0
+
+    for i, it in enumerate(items):
+        loc = it.get("location") or {}
+        address = (loc.get("ru") or "").strip()
+
+        cached = cache.get(address)
+        if cached and len(cached) == 3 and cached[0] is not None:
+            lat, lon, display = cached
+        else:
+            yield sse("progress", {"index": i + 1, "total": total, "address": address[:80]})
+            lat, lon, display = _nominatim_geocode(address)
+            cache[address] = [lat, lon, display]
+            _save_geocache(cache)
+            time.sleep(NOMINATIM_DELAY)
+
+        if lat is None or lon is None:
+            yield sse("skip", {"index": i + 1, "address": address[:80]})
+            continue
+
+        zhk = _normalize_item(it, lat, lon, display)
+        shown += 1
+        yield sse("zhk", zhk)
+
+    yield sse("done", {"shown": shown, "total": total})
+
+
+def build_full_list():
+    """Синхронный вариант — для /api/zhk."""
+    items = _fetch_raw_items()
+    cache = _load_geocache()
+    result = []
+    for it in items:
+        address = ((it.get("location") or {}).get("ru") or "").strip()
+        cached = cache.get(address)
+        if cached and len(cached) == 3 and cached[0] is not None:
+            lat, lon, display = cached
+        else:
+            lat, lon, display = _nominatim_geocode(address)
+            cache[address] = [lat, lon, display]
+            _save_geocache(cache)
+            time.sleep(NOMINATIM_DELAY)
+        if lat is None or lon is None:
+            continue
+        result.append(_normalize_item(it, lat, lon, display))
+    return result
 
 
 # ============================================================
@@ -284,25 +378,42 @@ def get_zhk(force_refresh=False):
 # ============================================================
 class Handler(SimpleHTTPRequestHandler):
     def do_GET(self):
-        if self.path.startswith("/api/zhk"):
-            # ?refresh=1 — принудительно обновить кэш
-            force = "refresh=1" in self.path
-            try:
-                data = get_zhk(force_refresh=force)
-                self._send_json(200, {
-                    "success": True,
-                    "count": len(data),
-                    "data": data,
-                })
-            except Exception as e:
-                print(f"[error] {e}")
-                self._send_json(502, {
-                    "success": False,
-                    "message": f"Ошибка загрузки: {e}",
-                    "data": [],
-                })
+        if self.path == "/api/zhk/stream":
+            self._handle_stream()
             return
+
+        if self.path == "/api/zhk":
+            try:
+                data = build_full_list()
+                self._send_json(200, {"success": True, "count": len(data), "data": data})
+            except Exception as e:
+                self._send_json(502, {"success": False, "message": str(e), "data": []})
+            return
+
         return super().do_GET()
+
+    def _handle_stream(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "keep-alive")
+        self.send_header("X-Accel-Buffering", "no")
+        self.end_headers()
+
+        try:
+            for chunk in stream_zhk():
+                self.wfile.write(chunk.encode("utf-8"))
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            print("[sse] клиент отключился")
+        except Exception as e:
+            print(f"[sse] ошибка: {e}")
+            try:
+                err = f"event: error\ndata: {json.dumps({'message': str(e)})}\n\n"
+                self.wfile.write(err.encode("utf-8"))
+                self.wfile.flush()
+            except Exception:
+                pass
 
     def _send_json(self, status, obj):
         body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
@@ -314,20 +425,25 @@ class Handler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, fmt, *args):
-        pass  # тихий режим
+        pass
 
 
 # ============================================================
 # ЗАПУСК
 # ============================================================
 if __name__ == "__main__":
+    from socketserver import ThreadingMixIn
+
+    class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
     port = 8000
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-    httpd = HTTPServer(("", port), Handler)
-    print(f"Сервер запущен:   http://localhost:{port}/")
-    print(f"API ЖК:           http://localhost:{port}/api/zhk")
-    print(f"Принудительный обновление кэша: /api/zhk?refresh=1")
+    httpd = ThreadedHTTPServer(("", port), Handler)
+    print(f"Сервер:         http://localhost:{port}/")
+    print(f"SSE-поток:      http://localhost:{port}/api/zhk/stream")
+    print(f"Полный список:  http://localhost:{port}/api/zhk")
     print("Ctrl+C для остановки.\n")
 
     try:
