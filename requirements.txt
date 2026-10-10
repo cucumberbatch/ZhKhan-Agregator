@@ -1,2 +1,13 @@
-requests>=2.31.0
-python-dotenv>=1.0.0
+# Основной сервер (server.py) использует только стандартную библиотеку:
+# http.server, urllib.request, json, re — внешних зависимостей нет.
+
+# --- Парсинг HTML с elicense.kz (elicense_html_parser.py) ---
+beautifulsoup4>=4.12.0
+lxml>=4.9.0
+
+# --- Обход капты elicense.kz (test_elicense.py, test_elicense_v2.py) ---
+playwright>=1.40.0
+ddddocr>=1.5.6
+
+# После установки playwright нужно один раз скачать браузер:
+#   playwright install chromium
