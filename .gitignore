@@ -1,0 +1,22 @@
+# Секреты
+.env
+.env.*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Кэши данных (пересобираются автоматически)
+bin_cache.json
+geocode_cache.json
+
+# Накопленные данные eLicense
+elicense_data.json
+
+# Артефакты прогонов eLicense
+captcha.png
+captchas/
+elicense_result.html
+elicense_result.png
