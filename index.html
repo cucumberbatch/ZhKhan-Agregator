@@ -27,6 +27,13 @@
             --shadow-sm: 0 1px 2px rgba(27,31,36,.04);
             --shadow-md: 0 4px 14px rgba(27,31,36,.08);
             --radius:    10px;
+            /* Отступ прокручиваемого списка. Липкие шапки прилипают к
+               верхнему краю #list, а position:sticky в Chrome считает
+               смещение от края контента, то есть на величину этого
+               отступа ниже. Чтобы шапка встала вровень с рамкой
+               панели, вычитаем его; держим в одной переменной, иначе
+               значения разъедутся при правке отступов. */
+            --list-pad:  12px;
         }
 
         * { box-sizing: border-box; }
@@ -111,7 +118,7 @@
         #list {
             flex: 1;
             overflow-y: auto;
-            padding: 12px 12px 20px;
+            padding: var(--list-pad) var(--list-pad) 20px;
         }
 
         /* Скроллбар потоньше */
@@ -180,7 +187,9 @@
             border: 1px solid var(--border);
             border-radius: var(--radius);
             background: var(--surface);
-            overflow: hidden;
+            /* Без overflow:hidden — он делает блок контейнером
+               прокрутки, и position:sticky внутри перестаёт работать.
+               Скруглённые углы задаём шапке и последней карточке. */
         }
         .group-head {
             display: flex;
@@ -191,7 +200,20 @@
             background: #f6f7f9;
             border-bottom: 1px solid var(--border);
             user-select: none;
+            /* Шапка липнет к верху списка: на «Нәжімеденова» с
+               12 объектами иначе адрес уезжает за экран и видно
+               только сами карточки. */
+            position: sticky;
+            top: calc(-1 * var(--list-pad));
+            z-index: 2;
+            border-radius: calc(var(--radius) - 1px)
+                           calc(var(--radius) - 1px) 0 0;
         }
+        .group.collapsed .group-head {
+            border-radius: calc(var(--radius) - 1px);
+            border-bottom: none;
+        }
+        .group-body > .card:last-child { margin-bottom: 0; }
         .group-head:hover { background: #eef0f3; }
         .group-caret {
             width: 0; height: 0;
@@ -337,7 +359,8 @@
             border-radius: var(--radius);
             background: var(--surface);
             margin-bottom: 8px;
-            overflow: hidden;
+            /* Как и у .group — без overflow:hidden, иначе шапка
+               перестаёт липнуть. Углы задаём шапке. */
         }
         .tree-dev.active { border-color: var(--accent); }
         .tree-dev-head {
@@ -346,8 +369,19 @@
             gap: 8px;
             padding: 10px 12px;
             cursor: pointer;
+            background: var(--surface);
+            /* Имя застройщика — тот самый контекст, который терялся
+               при прокрутке ветки «ЖК без даты» на 40 позиций. */
+            position: sticky;
+            top: calc(-1 * var(--list-pad));
+            z-index: 3;
+            border-radius: calc(var(--radius) - 1px)
+                           calc(var(--radius) - 1px) 0 0;
         }
         .tree-dev-head:hover { background: #f6f7f9; }
+        .tree-dev.closed .tree-dev-head {
+            border-radius: calc(var(--radius) - 1px);
+        }
         .tree-dev-name {
             flex: 1;
             min-width: 0;
@@ -375,6 +409,14 @@
             color: var(--text-soft);
             cursor: pointer;
             user-select: none;
+            /* Ветка липнет под шапкой застройщика. Смещение задаёт
+               renderTree: высота шапки зависит от того, заняло ли
+               имя застройщика одну строку или две, и жёстко в CSS
+               не угадать. */
+            position: sticky;
+            top: calc(var(--dev-head-h, 37px) - var(--list-pad));
+            z-index: 2;
+            background: var(--surface);
         }
         .tree-branch-head:hover { background: #f6f7f9; }
         .tree-branch-tag {
@@ -1371,6 +1413,24 @@
             return (lic && lic.start_date) || null;
         }
 
+        // Дата выдачи уведомления. У элементов ветки сирот поле называется
+        // issue_date, но в него кладётся issue_date_iso из zhk_match.py,
+        // то есть это ISO-строка — сравнение лексикографическое и
+        // «12» идёт раньше «2». На всякий случай берём и ISO-вариант.
+        function notifDate(n) {
+            return n.issue_date_iso || n.issue_date || '';
+        }
+
+        // От новых к старым. Без даты уходят в конец: поставить такое
+        // уведомление вперёд — значит показать пользователю пустоту.
+        function cmpByIssueDateDesc(a, b) {
+            const da = notifDate(a), db = notifDate(b);
+            if (!da && !db) return 0;
+            if (!da) return 1;
+            if (!db) return -1;
+            return da < db ? 1 : (da > db ? -1 : 0);
+        }
+
         function cmpDeveloper(a, b) {
             return (a.customer || '').localeCompare(b.customer || '', 'ru');
         }
@@ -1529,7 +1589,12 @@
                 if (!data) throw new Error('список ЖК не собран');
 
                 const painted = applyLicenses(data.licenses);
-                orphanNotifs = data.unmatched || [];
+                // От новых к старым: уведомление о начале СМР интересно
+                // прежде всего свежее, а порядок сервера по убыванию
+                // id даёт наоборот — от старых к новым. Сортируем
+                // копию, исходный массив ответа не трогаем.
+                orphanNotifs = (data.unmatched || []).slice()
+                    .sort(cmpByIssueDateDesc);
                 if (currentView === 'tree') renderTree();
 
                 const s = data.stats || {};
@@ -1655,8 +1720,10 @@
                     .sort((a, b) => (startDateOf(a) || '9999')
                         .localeCompare(startDateOf(b) || '9999'));
                 const noDate = dev.zhk.filter(z => !licensesById.has(z.id));
-                const orphans = dev.orphans.slice().sort((a, b) =>
-                    (a.issue_date || '9999').localeCompare(b.issue_date || '9999'));
+                // От новых к старым. Раньше здесь стоял localeCompare
+                // по возрастанию, и уведомления шли от старых к новым.
+                const orphans = dev.orphans.slice()
+                    .sort(cmpByIssueDateDesc);
 
                 head.addEventListener('click', () => {
                     // Повторный клик по тому же застройщику снимает выбор
@@ -1691,7 +1758,22 @@
             listEl.innerHTML = '';
             listEl.appendChild(frag);
             bindTreeHandlers();
+            measureDevHeads();
             applyFilter();
+        }
+
+        // Ширина шапки застройщика зависит от того, заняло ли имя одну
+        // строку или две, поэтому высоту липких веток задаём из JS:
+        // в CSS жёсткое значение либо оставляло бы щель, либо
+        // наезжало на имя второй строки.
+        function measureDevHeads() {
+            listEl.querySelectorAll('.tree-dev').forEach(dev => {
+                const head = dev.querySelector('.tree-dev-head');
+                if (head) {
+                    dev.style.setProperty('--dev-head-h',
+                                         head.offsetHeight + 'px');
+                }
+            });
         }
 
         function bindTreeHandlers() {
@@ -1726,6 +1808,17 @@
                 }
             });
         }
+
+        // Ширина панели меняется — длинное имя застройщика перестаёт
+        // помещаться в одну строку, и липкие ветки поедут. Пересчитываем
+        // после того, как браузер пересчитал вёрстку.
+        let resizeTimer = null;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(() => {
+                if (currentView === 'tree') measureDevHeads();
+            }, 150);
+        });
 
         // Переключение вида: список по адресу и дерево по застройщикам
         // делят один контейнер
