@@ -116,7 +116,9 @@ class Database:
 
         try:
             for table in ("geocode_cache", "bin_cache",
-                          "elicense_companies", "elicense_notifications"):
+                          "elicense_companies", "elicense_notifications",
+                          "telegram_users", "sent_notifications",
+                          "refresh_log"):
                 try:
                     n = self.scalar(f"SELECT COUNT(*) FROM {table}", default=0)
                     out["tables"][table] = n
@@ -194,6 +196,40 @@ CREATE INDEX IF NOT EXISTS idx_notif_applicant
     ON elicense_notifications (applicant_bin);
 CREATE INDEX IF NOT EXISTS idx_geo_updated
     ON geocode_cache (updated_at);
+
+-- Подписчики телеграм-бота: те, кто подключил бота и хочет уведомления
+CREATE TABLE IF NOT EXISTS telegram_users (
+    chat_id    TEXT PRIMARY KEY,
+    username   TEXT,
+    active     INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+
+-- Что уже отправлено подписчикам. Ключ — устойчивый идентификатор
+-- объекта (id ЖК или номер документа), вид — что за событие.
+-- Без этой таблики после перезапуска уведомления приходили бы заново.
+CREATE TABLE IF NOT EXISTS sent_notifications (
+    kind        TEXT NOT NULL,
+    item_key    TEXT NOT NULL,
+    sent_at     TEXT NOT NULL,
+    subscribers INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (kind, item_key)
+);
+
+-- Журнал фоновых обновлений: когда проходил запуск и что изменилось
+CREATE TABLE IF NOT EXISTS refresh_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    started_at  TEXT NOT NULL,
+    finished_at TEXT,
+    status      TEXT,
+    new_zhk     INTEGER NOT NULL DEFAULT 0,
+    new_smr     INTEGER NOT NULL DEFAULT 0,
+    notified    INTEGER NOT NULL DEFAULT 0,
+    message     TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_refresh_started
+    ON refresh_log (started_at);
 """
 
 

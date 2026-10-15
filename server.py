@@ -52,6 +52,7 @@ import queue
 import re
 import threading
 import time
+from datetime import datetime, timedelta
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import parse_qs, urlencode, urlsplit
 from urllib.request import Request, urlopen
@@ -60,6 +61,8 @@ from urllib.error import URLError, HTTPError
 import elicense_store
 import zhk_match
 import elicense_client
+import refresh as refresh_mod
+import telegram_bot as tg_mod
 from storage import db, migrate_from_json
 
 # ============================================================
@@ -154,8 +157,28 @@ def load_fixture(name):
 def fixture_zhk():
     """Список ЖК из фикстуры (тот же формат, что у build_full_list)."""
     return (load_fixture("zhk.json") or {}).get("data") or []
+
+
 MATCH_RADIUS_M      = int(os.environ.get("MATCH_RADIUS_M", "300"))  # радиус гео-подбора
 ZHK_CACHE_TTL       = int(os.environ.get("ZHK_CACHE_TTL", "600"))   # секунд жизни кэша ЖК
+
+# --- Фоновое обновление и телеграм -----------------------------------
+# Обновление данных раз в сутки по времени Астаны. Пока включено не
+# всегда: REFRESH_ENABLED=0 выключает задание целиком.
+REFRESH_ENABLED    = os.environ.get("REFRESH_ENABLED", "1").strip().lower() \
+                     not in ("0", "false", "no", "off")
+REFRESH_HOUR       = int(os.environ.get("REFRESH_HOUR", "3"))
+REFRESH_MINUTE     = int(os.environ.get("REFRESH_MINUTE", "0"))
+
+# Адрес для ссылок в сообщениях бота: без него ссылки не будет.
+PUBLIC_URL         = (os.environ.get("PUBLIC_URL") or "").strip()
+
+# При первом запуске обновления разослать нечего: объекты не новые,
+# их просто раньше не показывали. Иначе при каждом деплое пользователям
+# прилетала бы пачка «новых» объектов.
+REFRESH_NOTIFY_ON_FIRST_RUN = os.environ.get(
+    "REFRESH_NOTIFY_ON_FIRST_RUN", "0").strip().lower() in (
+        "1", "true", "yes", "on")
 
 _zhk_cache_data = None
 _zhk_cache_time = 0.0
@@ -188,6 +211,185 @@ def _shutdown_elicense():
     except Exception as e:
         print(f"  не удалось: {e}")
     _elicense_client = None
+
+
+# ============================================================
+# ФОНОВОЕ ОБНОВЛЕНИЕ И ТЕЛЕГРАМ
+# ============================================================
+_telegram_bot = None
+_scheduler = None
+
+
+def telegram_bot_instance():
+    """Бот создаётся один раз на процесс."""
+    global _telegram_bot
+    if _telegram_bot is None:
+        _telegram_bot = tg_mod.TelegramBot(db)
+    return _telegram_bot
+
+
+def start_telegram():
+    """Запускает бота, если задан токен. Иначе сервер работает без него."""
+    bot = telegram_bot_instance()
+    if not bot.start():
+        return None
+    if not bot.token:
+        return None
+
+    # /status должен показывать реальное состояние, а не пустоту
+    def summary():
+        try:
+            zhk = _zhk_cache_peek() or []
+            lic = _licenses_snapshot()
+            return {
+                "zhk": len(zhk),
+                "dated": len(lic.get("by_zhk") or {}),
+                "developers": len({z.get("customer_bin")
+                                   for z in zhk if z.get("customer_bin")}),
+                "notifications": (lic.get("stats") or {}).get("notifications", 0),
+                "last_refresh": _last_refresh_text(),
+            }
+        except Exception:
+            return {}
+    bot.status_provider = summary
+    return bot
+
+
+def _now_astana():
+    return datetime.now(refresh_mod._tz())
+
+
+def _last_refresh_text():
+    row = db.query_one(
+        "SELECT finished_at FROM refresh_log WHERE status='ok'"
+        " ORDER BY id DESC LIMIT 1")
+    if not row or not row["finished_at"]:
+        return None
+    try:
+        return datetime.fromisoformat(row["finished_at"]).strftime(
+            "%d.%m.%Y %H:%M")
+    except ValueError:
+        return row["finished_at"]
+
+
+def _licenses_snapshot():
+    """Сопоставление уведомлений с ЖК без обращения к сети."""
+    zhk_list = _zhk_cache_peek()
+    if not zhk_list:
+        return {}
+    try:
+        return match_licenses_to_zhk(zhk_list, geocode=False)
+    except Exception as e:
+        print(f"[licenses] не собрать: {type(e).__name__}: {e}")
+        return {}
+
+
+def perform_refresh():
+    """
+    Один проход обновления: реестр проектов, затем уведомления.
+
+    Порядок важен. Сначала обновляем список ЖК — из него берутся БИН
+    застройщиков, по которым потом опрашивается elicense.kz.
+    """
+    global _zhk_cache_data, _zhk_cache_time
+
+    print("[refresh] обновляю реестр проектов…")
+    if TEST_MODE:
+        zhk_list = fixture_zhk()
+        print("[refresh] тестовый режим: беру фикстуру")
+    else:
+        # Сбрасываем кэш списка, иначе _zhk_cache вернёт старое
+        with _zhk_cache_lock:
+            _zhk_cache_data = None
+            _zhk_cache_time = 0.0
+        zhk_list = build_full_list()
+        with _zhk_cache_lock:
+            _zhk_cache_data = zhk_list
+            _zhk_cache_time = time.time()
+    print(f"[refresh] объектов: {len(zhk_list)}")
+
+    # --- Уведомления о начале СМР по всем известным БИН ---
+    bins = sorted({z["customer_bin"] for z in zhk_list
+                   if z.get("customer_bin")})
+    if bins:
+        bins += [r["bin"] for r in db.query_all("SELECT bin FROM elicense_companies")
+                 if r["bin"] not in bins]
+
+    client = None if TEST_MODE else _get_elicense_client()
+    total_new = 0
+    for i, b in enumerate(bins, 1):
+        if TEST_MODE:
+            break
+        print(f"[refresh] уведомления {i}/{len(bins)}: БИН {b}")
+        try:
+            before = db.query_one(
+                "SELECT COUNT(*) c FROM elicense_notifications WHERE bin=?",
+                (b,))["c"]
+            # Полный поиск: он авторитетный и чистит исчезнувшие
+            # документы. С фильтром даты данные бы просто дописывались.
+            data = get_elicense_notifications(b, refresh=True)
+            if not data.get("success"):
+                print(f"[refresh]   не удалось: {data.get('error')}")
+                continue
+            after = db.query_one(
+                "SELECT COUNT(*) c FROM elicense_notifications WHERE bin=?",
+                (b,))["c"]
+            if after > before:
+                total_new += after - before
+                # Новые уведомления почти всегда без адреса: подтягиваем PDF
+                enrich_notifications(b)
+        except Exception as e:
+            print(f"[refresh]   БИН {b}: {type(e).__name__}: {e}")
+    if not TEST_MODE and client is not None:
+        try:
+            client.close()
+        except Exception:
+            pass
+        _elicense_client = None
+
+    matched = _licenses_snapshot()
+    notifications = elicense_store.all_notifications()
+
+    return {
+        "zhk": zhk_list,
+        "notifications": notifications,
+        "by_zhk": matched.get("by_zhk") or {},
+        "stats": matched.get("stats") or {},
+        "base_url": PUBLIC_URL,
+    }
+
+
+def start_background_jobs():
+    """Поднимает планировщик и бота. В тестовом режиме — нет."""
+    global _scheduler
+    if TEST_MODE:
+        print("[background] тестовый режим — фоновые задания не запускаются")
+        return
+
+    if not REFRESH_ENABLED:
+        print("[background] обновление выключено (REFRESH_ENABLED=0)")
+    else:
+        _scheduler = refresh_mod.RefreshScheduler(
+            refresh_fn=perform_refresh,
+            bot=telegram_bot_instance(),
+            db=db,
+            hour=REFRESH_HOUR,
+            minute=REFRESH_MINUTE,
+        )
+        if _scheduler.bot and not _scheduler.bot.token:
+            _scheduler.bot = None
+        _scheduler.first_run = not REFRESH_NOTIFY_ON_FIRST_RUN
+        _scheduler.start()
+
+    start_telegram()
+
+
+def stop_background_jobs():
+    global _scheduler
+    if _scheduler:
+        _scheduler.stop()
+    if _telegram_bot:
+        _telegram_bot.stop()
 
 
 # ============================================================
@@ -594,7 +796,7 @@ def cache_put_bin(customer, bin_value):
 
 
 def _now_iso():
-    from datetime import datetime
+    from datetime import datetime, timedelta
     return datetime.now().isoformat(timespec="seconds")
 
 
@@ -1438,7 +1640,96 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/licenses":
             self._handle_licenses()
             return
+        if path in ("/api/refresh", "/api/telegram"):
+            self._handle_refresh()
+            return
         return super().do_GET()
+
+    # ---------------------------------------------------------
+    # ФОНОВОЕ ОБНОВЛЕНИЕ И ТЕЛЕГРАМ
+    # ---------------------------------------------------------
+    def _handle_refresh(self):
+        """
+        /api/telegram                 — состояние подписок и бота
+        /api/refresh                  — журнал последних запусков
+        /api/refresh?run=1            — прогнать обновление сейчас
+        /api/telegram?test=1          — отправить тестовое сообщение
+        """
+        parsed = urlsplit(self.path)
+        path = parsed.path.rstrip("/") or "/"
+        query = parse_qs(parsed.query)
+        flag = lambda name: (query.get(name) or ["0"])[0].strip().lower() \
+            in ("1", "true", "yes", "on")
+
+        if path == "/api/telegram" and flag("test"):
+            bot = telegram_bot_instance()
+            if not bot.token:
+                self._send_json(503, {"success": False,
+                                      "message": "TELEGRAM_BOT_TOKEN не задан"})
+                return
+            try:
+                sent = bot.broadcast(
+                    "<b>Проверка связи</b>\nЭто тестовое сообщение бота.")
+            except Exception as e:
+                self._send_json(502, {"success": False,
+                                      "message": f"{type(e).__name__}: {e}"})
+                return
+            self._send_json(200, {"success": True, "sent": sent,
+                                  "subscribers": bot.stats()})
+            return
+
+        if path == "/api/telegram":
+            bot = telegram_bot_instance()
+            users = [dict(r) for r in db.query_all(
+                "SELECT chat_id, username, active, created_at FROM"
+                " telegram_users ORDER BY created_at DESC LIMIT 200")]
+            self._send_json(200, {
+                "success": True,
+                "bot_configured": bool(bot.token),
+                "bot_username": bot._bot_username,
+                "subscribers": bot.stats(),
+                "last_refresh": _last_refresh_text(),
+                "schedule": (f"{REFRESH_HOUR:02d}:{REFRESH_MINUTE:02d}"
+                             f" {refresh_mod.ASTANA_TZ}") if REFRESH_ENABLED
+                            else "выключено",
+                "users": users,
+            })
+            return
+
+        # /api/refresh
+        if flag("run"):
+            if TEST_MODE:
+                self._send_json(200, {"success": True, "message":
+                                      "тестовый режим: обновление не выполняется"})
+                return
+            if _scheduler is None:
+                self._send_json(409, {"success": False,
+                                      "message": "планировщик не запущен"})
+                return
+            try:
+                result = _scheduler.run_now(force=True)
+            except Exception as e:
+                self._send_json(502, {"success": False,
+                                      "message": f"{type(e).__name__}: {e}"})
+                return
+            self._send_json(200, {"success": True, "result": {
+                "zhk": len((result or {}).get("zhk") or []),
+                "notifications": len((result or {}).get("notifications") or []),
+            }})
+            return
+
+        rows = [dict(r) for r in db.query_all(
+            "SELECT started_at, finished_at, status, new_zhk, new_smr,"
+            " notified, message FROM refresh_log ORDER BY id DESC LIMIT 30")]
+        self._send_json(200, {
+            "success": True,
+            "enabled": REFRESH_ENABLED and not TEST_MODE,
+            "schedule": (f"{REFRESH_HOUR:02d}:{REFRESH_MINUTE:02d}"
+                         f" {refresh_mod.ASTANA_TZ}"),
+            "next_run_in_s": (refresh_mod.seconds_until_next_run()
+                              if REFRESH_ENABLED and not TEST_MODE else None),
+            "log": rows,
+        })
 
     # ---------------------------------------------------------
     # ELICENSE
@@ -1746,13 +2037,36 @@ if __name__ == "__main__":
     print(f"eLicense SSE:   http://localhost:{port}/api/elicense/stream?bin=<БИН>")
     print(f"Хранилище:      {elicense_store.summary()['companies']}"
           f" компаний в {db.path}")
+    print()
+
+    if TEST_MODE:
+        print("Фоновые задания: отключены (тестовый режим)")
+    else:
+        if REFRESH_ENABLED:
+            nxt = _now_astana() + timedelta(
+                seconds=refresh_mod.seconds_until_next_run())
+            print(f"Обновление:    ежедневно в {REFRESH_HOUR:02d}:"
+                  f"{REFRESH_MINUTE:02d} {refresh_mod.ASTANA_TZ}"
+                  f" (ближайшее {nxt:%Y-%m-%d %H:%M})")
+        else:
+            print("Обновление:    выключено (REFRESH_ENABLED=0)")
+
+        token = (os.environ.get("TELEGRAM_BOT_TOKEN") or "").strip()
+        print(f"Телеграм-бот:  "
+              f"{'настроен' if token else 'не настроен (нужен TELEGRAM_BOT_TOKEN)'}")
+        print(f"Состояние бота: http://localhost:{port}/api/telegram")
+        print(f"Журнал обновл.: http://localhost:{port}/api/refresh")
+
     print("Ctrl+C для остановки.\n")
+
+    start_background_jobs()
 
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nСервер остановлен.")
     finally:
+        stop_background_jobs()
         httpd.shutdown()
         _shutdown_elicense()
 

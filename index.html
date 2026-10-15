@@ -158,6 +158,22 @@
             letter-spacing: -.005em;
         }
 
+        /* ---------- Облегчение карточки ----------
+           Названия из реестра бывают на 5–6 строк, и одна такая карточка
+           занимала пол-экрана. Ограничиваем число строк: полный текст
+           остаётся в попапе, там ограничения нет. */
+        .card .title,
+        .card .copy-row .value {
+            display: -webkit-box;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+        }
+        .card .title { -webkit-line-clamp: 3; }
+        .card .copy-row .value { -webkit-line-clamp: 2; }
+
+        /* Адрес уже написан строкой выше — в заголовке группы */
+        .card.in-group .copy-row.addr { display: none; }
+
         /* ---------- Группа объектов на одном адресе ---------- */
         .group {
             margin-bottom: 10px;
@@ -230,31 +246,63 @@
         }
         .group-icon.blue { background: #6b7280; }
 
-        /* ---------- Сортировка ---------- */
-        .sort-wrap {
+        /* ---------- Фильтры-чипы ---------- */
+        /* Чипы вместо селекта: видно, сколько объектов за каждой
+           категорией, и фильтр в один клик, без выпадающего списка. */
+        .chips {
             display: flex;
-            align-items: center;
-            gap: 8px;
+            gap: 6px;
             margin-top: 10px;
         }
-        .sort-wrap label {
+        .chip {
+            flex: 1;
+            display: flex;
+            align-items: baseline;
+            justify-content: center;
+            gap: 5px;
+            font: inherit;
             font-size: 12px;
             color: var(--text-soft);
-            flex: none;
-        }
-        .sort-wrap select {
-            flex: 1;
-            min-width: 0;
-            font: inherit;
-            font-size: 12.5px;
-            color: var(--text);
             background: var(--surface);
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 6px 8px;
+            padding: 6px 4px;
             cursor: pointer;
+            white-space: nowrap;
         }
-        .sort-wrap select:hover { border-color: var(--border-2); }
+        .chip:hover { border-color: var(--border-2); }
+        .chip.active {
+            background: var(--text);
+            border-color: var(--text);
+            color: #fff;
+            font-weight: 600;
+        }
+        .chip-n {
+            font-size: 11px;
+            opacity: .7;
+            font-variant-numeric: tabular-nums;
+        }
+
+        /* Панель: переключатель вида и сортировка в одну строку,
+           чтобы шапка не росла в четыре ряда */
+        .toolbar {
+            display: flex;
+            gap: 8px;
+            margin-top: 10px;
+            align-items: stretch;
+        }
+        .toolbar .view-toggle { margin-top: 0; flex: 1; }
+        .toolbar #sort {
+            font: inherit;
+            font-size: 12px;
+            color: var(--text-soft);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 9px;
+            padding: 4px 6px;
+            cursor: pointer;
+            max-width: 130px;
+        }
 
         /* ---------- Переключатель вида ---------- */
         .view-toggle {
@@ -727,19 +775,26 @@
                            placeholder="Поиск по названию, адресу, застройщику…">
                 </div>
 
-                <div class="sort-wrap">
-                    <label for="sort">Сортировка</label>
-                    <select id="sort">
-                        <option value="registry">Как в реестре</option>
-                        <option value="date">По дате начала СМР</option>
-                        <option value="developer">По застройщику</option>
-                    </select>
+                <div class="chips" role="group" aria-label="Фильтр">
+                    <button type="button" class="chip active" data-filter="all">
+                        Все <span class="chip-n" data-count="all">0</span></button>
+                    <button type="button" class="chip" data-filter="dated">
+                        С датой СМР <span class="chip-n" data-count="dated">0</span></button>
+                    <button type="button" class="chip" data-filter="undated">
+                        Без даты <span class="chip-n" data-count="undated">0</span></button>
                 </div>
-            <div class="view-toggle" role="tablist">
-                    <button type="button" data-view="list"
-                            class="active" role="tab">По адресу</button>
-                    <button type="button" data-view="tree"
-                            role="tab">По застройщику</button>
+
+                <div class="toolbar">
+                    <div class="view-toggle" role="tablist">
+                        <button type="button" data-view="list"
+                                class="active" role="tab">По адресу</button>
+                        <button type="button" data-view="tree"
+                                role="tab">По застройщику</button>
+                    </div>
+                    <select id="sort" title="Порядок в списке">
+                        <option value="registry">Как в реестре</option>
+                        <option value="date">По дате СМР</option>
+                    </select>
                 </div>
             </header>
             <div id="list"></div>
@@ -865,6 +920,10 @@
         let currentView = 'list';
         let selectedBin = null;
 
+        // Активный чип-фильтр: 'all' | 'dated' | 'undated'.
+        // Живёт рядом с currentView, потому что применяется к обоим видам.
+        let currentFilter = 'all';
+
         const listEl     = document.getElementById('list');
         const emptyEl    = document.getElementById('empty');
         const cntEl      = document.getElementById('cnt');
@@ -935,12 +994,12 @@
             }
         });
 
-        function copyRow(label, value) {
+        function copyRow(label, value, cls) {
             if (!value) return '';
             const v = escapeHtml(value);
             const raw = escapeHtml(value).replace(/'/g, '&#39;');
             return `
-                <div class="copy-row">
+                <div class="copy-row${cls ? ' ' + cls : ''}">
                     <span class="label">${label}</span>
                     <span class="value">${v}</span>
                     <button class="copy-btn" type="button"
@@ -1016,14 +1075,20 @@
                 </div>`;
         }
         
+        // Адрес помечен классом .addr: карточки строятся по мере прихода
+        // SSE, до того как известно, попадёт объект в группу или нет.
+        // Поэтому адрес не убираем из разметки, а прячем классом
+        // .in-group, который ставит buildGroups. Иначе пришлось бы
+        // перерисовывать карточку и терять бейдж с датой и класс active.
+        // БИН убран совсем: двенадцать цифр в списке не читают, а в
+        // попапе он есть.
         function cardHtml(zhk) {
             const route = route2gisUrl(zhk);
             return `
                 <div class="title">${escapeHtml(cutTail(zhk.name)) || '—'}</div>
                 ${licenseBadge(zhk.id)}
-                ${copyRow('Адрес:', zhk.address)}
+                ${copyRow('Адрес:', zhk.address, 'addr')}
                 ${copyRow('Застройщик:', zhk.customer)}
-                ${zhk.customer_bin ? copyRow('БИН:', zhk.customer_bin) : ''}
                 <div class="foot-row">
                     <span class="code">${escapeHtml(zhk.code) || ''}</span>
                     <a class="route-btn" target="_blank"
@@ -1238,8 +1303,15 @@
             const frag = document.createDocumentFragment();
             order.forEach(key => {
                 const group = byKey.get(key);
+                const inGroup = group.items.length > 1;
 
-                if (group.items.length < 2) {
+                // Адрес в карточке группы дублировал заголовок группы
+                group.items.forEach(z => {
+                    const card = cardsById.get(z.id);
+                    if (card) card.classList.toggle('in-group', inGroup);
+                });
+
+                if (!inGroup) {
                     group.items.forEach(z => {
                         const card = cardsById.get(z.id);
                         if (card) frag.appendChild(card);
@@ -1664,13 +1736,16 @@
                     .forEach(function(b) { b.classList.toggle('active', b === btn); });
 
                 // Сортировка относится только к списку по адресу
-                var sw = document.querySelector('.sort-wrap');
-                if (sw) sw.style.display = currentView === 'list' ? '' : 'none';
+                var so = document.getElementById('sort');
+                if (so) so.style.display = currentView === 'list' ? '' : 'none';
 
                 if (currentView === 'tree') {
                     selectedBin = null;
                     highlightMarkers();
                     renderTree();
+                    // Дерево строилось заново, поэтому фильтр
+                    // по дате на нём ещё не применён.
+                    applyFilter();
                 } else {
                     buildGroups();
                     sortList(sortEl.value);
@@ -1678,46 +1753,139 @@
             });
         });
 
+        function matchesFilter(zhk, q) {
+            if (currentFilter === 'dated' && !licensesById.has(zhk.id)) {
+                return false;
+            }
+            if (currentFilter === 'undated' && licensesById.has(zhk.id)) {
+                return false;
+            }
+            if (!q) return true;
+            return (zhk.name || '').toLowerCase().includes(q) ||
+                (zhk.address || '').toLowerCase().includes(q) ||
+                (zhk.customer || '').toLowerCase().includes(q) ||
+                (zhk.customer_bin || '').toLowerCase().includes(q) ||
+                (zhk.designer || '').toLowerCase().includes(q) ||
+                (zhk.code || '').toLowerCase().includes(q);
+        }
+
+        // Счётчики на чипах: сколько ЖК в каждой категории.
+        // Считаем по полному списку, а не по результату поиска —
+        // иначе число прыгало бы вслед за текстом в поле.
+        function updateChipCounts() {
+            let dated = 0;
+            zhkList.forEach(z => { if (licensesById.has(z.id)) dated++; });
+            const all = zhkList.length;
+            const set = (name, value) => {
+                const el = document.querySelector('[data-count="' + name + '"]');
+                if (el) el.textContent = value;
+            };
+            set('all', all);
+            set('dated', dated);
+            set('undated', all - dated);
+        }
+
         function applyFilter() {
             const q = searchEl.value.trim().toLowerCase();
+            const visibleIds = new Set();
             let visibleCount = 0;
 
-            cardsById.forEach((card, id) => {
-                const zhk = zhkList.find(z => z.id === id);
-                if (!zhk) return;
-
-                const match = !q ||
-                    (zhk.name || '').toLowerCase().includes(q) ||
-                    (zhk.address || '').toLowerCase().includes(q) ||
-                    (zhk.customer || '').toLowerCase().includes(q) ||
-                    (zhk.customer_bin || '').toLowerCase().includes(q) ||
-                    (zhk.designer || '').toLowerCase().includes(q) ||
-                    (zhk.code || '').toLowerCase().includes(q);
-
-                card.style.display = match ? '' : 'none';
-                const entry = markersById.get(id);
-                if (entry) {
-                    if (match) {
-                        if (!map.hasLayer(entry.marker)) entry.marker.addTo(map);
-                        visibleCount++;
-                    } else {
-                        if (map.hasLayer(entry.marker)) map.removeLayer(entry.marker);
-                    }
+            zhkList.forEach(zhk => {
+                if (matchesFilter(zhk, q)) {
+                    visibleIds.add(zhk.id);
+                    visibleCount++;
                 }
             });
 
-            // Групповой заголовок прячем, только если скрыты все объекты
-            // внутри: иначе остаётся шапка без содержимого.
+            // --- Карточки списка ---
+            cardsById.forEach((card, id) => {
+                card.style.display = visibleIds.has(id) ? '' : 'none';
+            });
+
+            // --- Пункты дерева ---
+            listEl.querySelectorAll('.tree-item[data-id]').forEach(el => {
+                el.style.display = visibleIds.has(el.dataset.id) ? '' : 'none';
+            });
+
+            // --- Заголовки групп в списке по адресу ---
+            // Прячем, только если скрыты все объекты внутри: иначе
+            // остаётся шапка без содержимого. Счётчик в шапке
+            // пересчитываем: он обязан совпадать с числом на маркере,
+            // иначе «12 объектов» при двух видимых выглядит ошибкой.
             listEl.querySelectorAll('.group').forEach(el => {
-                const hidden = Array.from(el.querySelectorAll('.card'))
-                    .every(c => c.style.display === 'none');
-                el.style.display = hidden ? 'none' : '';
+                const shown = Array.from(el.querySelectorAll('.card'))
+                    .filter(c => c.style.display !== 'none').length;
+                el.style.display = shown ? '' : 'none';
+                const badge = el.querySelector('.group-count');
+                if (badge) badge.textContent = pluralZhk(shown);
+            });
+
+            // --- Ветки и застройщики в дереве ---
+            listEl.querySelectorAll('.tree-branch').forEach(branch => {
+                const anyItem = Array.from(branch.querySelectorAll('.tree-item'))
+                    .some(i => i.style.display !== 'none');
+                // Ветка уведомлений-сирот: у них нет id ЖК, поэтому фильтр
+                // «без даты» их не касается — они и есть уведомления
+                // о начале СМР. Под «все» и «с датой» показываем.
+                const id = branch.dataset.branch || '';
+                const keep = id.startsWith('o:')
+                    ? currentFilter !== 'undated' : anyItem;
+                branch.style.display = keep ? '' : 'none';
+
+                const dev = branch.closest('.tree-dev');
+                if (dev) {
+                    const anyBranch = Array.from(
+                        dev.querySelectorAll('.tree-branch'))
+                        .some(b => b.style.display !== 'none');
+                    dev.style.display = anyBranch ? '' : 'none';
+                }
+            });
+
+            // --- Маркеры ---
+            // Один маркер на адрес: он остаётся на карте, если виден
+            // хоть один объект группы, а число на бейдже пересчитывается.
+            // Иначе при фильтре «с датой СМР» зелёный маркер писал бы
+            // «12» — про весь адрес, а не про то, что осталось видно.
+            groupsByKey.forEach(g => {
+                const shown = g.items.filter(z => visibleIds.has(z.id)).length;
+                if (!shown) {
+                    if (map.hasLayer(g.marker)) map.removeLayer(g.marker);
+                    return;
+                }
+                // Проверяем именно hasLayer, а не наличие DOM-элемента:
+                // у снятого маркера getElement() вернёт null, и обратно
+                // на карту он уже не вернулся бы никогда.
+                if (!map.hasLayer(g.marker)) g.marker.addTo(map);
+
+                const isGroup = g.items.length > 1;
+                if (!isGroup) return;
+
+                const hasLicense = g.items.some(z => licensesById.has(z.id));
+                const el = g.marker.getElement();
+                const badge = el && el.querySelector('.group-icon');
+                if (!badge || badge.textContent !== String(shown)) {
+                    g.marker.setIcon(makeGroupIcon(shown, hasLicense));
+                }
             });
 
             emptyEl.style.display = visibleCount === 0 ? 'block' : 'none';
             cntEl.textContent = visibleCount;
+
+            // Счётчики на чипах обновляем здесь же: applyFilter зовётся и
+            // после загрузки списка, и после прихода дат, и при вводе
+            // в поиск. Отдельный вызов в трёх местах однажды разъехался бы.
+            updateChipCounts();
         }
         searchEl.addEventListener('input', applyFilter);
+
+        document.querySelectorAll('.chip').forEach(btn => {
+            btn.addEventListener('click', () => {
+                currentFilter = btn.dataset.filter;
+                document.querySelectorAll('.chip')
+                    .forEach(b => b.classList.toggle('active', b === btn));
+                applyFilter();
+            });
+        });
         sortEl.addEventListener('change', () => sortList(sortEl.value));
 
         // ============================================================
