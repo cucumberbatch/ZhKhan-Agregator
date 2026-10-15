@@ -112,6 +112,48 @@ ELICENSE_MAX_PAGES  = int(os.environ.get("ELICENSE_MAX_PAGES", "20"))
 # просто не видно. Окно в три месяца укладывает выдачу в одну страницу.
 # Переопределяется на запрос: ?months=6, ?days=30, ?from=… или ?all=1.
 ELICENSE_MONTHS    = int(os.environ.get("ELICENSE_MONTHS", "3"))
+
+# --- Тестовый режим -------------------------------------------------
+# MAPTOOL_TEST=1: сервер не ходит в qportal, не геокодирует и не
+# лезет на elicense.kz, а отдаёт заранее сохранённые ответы из
+# testdata/. Нужен, чтобы проверять вёрстку и логику интерфейса
+# без минутных ожиданий: обычный цикл проверки одной правки в JS —
+# перезапуск сервера, прогрев кэша, ожидание SSE, и только потом
+# браузер. Здесь всё это мгновенно и не зависит от внешних сервисов.
+#
+#   MAPTOOL_TEST=1 python server.py
+#
+# Фикстуры снимаются с живого сервера и кладутся рядом:
+#   curl  http://localhost:8000/api/zhk     > testdata/zhk.json
+#   curl  http://localhost:8000/api/licenses > testdata/licenses.json
+TEST_MODE     = os.environ.get("MAPTOOL_TEST", "").strip().lower() \
+                in ("1", "true", "yes", "on")
+TESTDATA_DIR  = os.environ.get("MAPTOOL_TESTDATA", "testdata")
+_fixture_cache = {}
+
+
+def load_fixture(name):
+    """Читает файл фикстуры (с кэшем на процесс). None, если файла нет."""
+    if name in _fixture_cache:
+        return _fixture_cache[name]
+
+    path = os.path.join(TESTDATA_DIR, name)
+    data = None
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            print(f"[test] не прочитан {path}: {e}")
+    else:
+        print(f"[test] нет фикстуры {path}")
+    _fixture_cache[name] = data
+    return data
+
+
+def fixture_zhk():
+    """Список ЖК из фикстуры (тот же формат, что у build_full_list)."""
+    return (load_fixture("zhk.json") or {}).get("data") or []
 MATCH_RADIUS_M      = int(os.environ.get("MATCH_RADIUS_M", "300"))  # радиус гео-подбора
 ZHK_CACHE_TTL       = int(os.environ.get("ZHK_CACHE_TTL", "600"))   # секунд жизни кэша ЖК
 
@@ -260,7 +302,7 @@ def _nominatim_geocode(address):
 
     # Если извлекли улицу — используем structured query
     if parsed["street"]:
-        # street для Nominatim = "<housenumber> <streetname>"[citation:1]
+        # street для Nominatim = "<housenumber> <streetname>"
         if parsed["housenumber"]:
             params["street"] = f"{parsed['housenumber']} {parsed['street']}"
         else:
@@ -271,6 +313,14 @@ def _nominatim_geocode(address):
         # Fallback: свободный запрос, но с countrycodes
         params["q"] = address
 
+    # Контракт — всегда тройка: функцию используют и как геокодер для
+    # zhk_match, где вызывающий делает `lat, lon, display = geocode(...)`.
+    hit = _nominatim_request(params)
+    return hit if hit else (None, None, None)
+
+
+def _nominatim_request(params):
+    """Один запрос к Nominatim. Возвращает (lat, lon, display) или None."""
     url = NOMINATIM_URL + "?" + urlencode(params)
     req = Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
 
@@ -279,17 +329,159 @@ def _nominatim_geocode(address):
             with urlopen(req, timeout=20) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
             if not data:
-                return None, None, None
+                return None
             hit = data[0]
-            return float(hit["lat"]), float(hit["lon"]), hit.get("display_name", "")
+            return (float(hit["lat"]), float(hit["lon"]),
+                    hit.get("display_name", ""))
         except HTTPError as e:
             if e.code == 429 and attempt < NOMINATIM_RETRIES:
                 time.sleep(NOMINATIM_RETRY_PAUSE)
                 continue
-            return None, None, None
-        except (URLError, json.JSONDecodeError):
-            return None, None, None
-    return None, None, None
+            return None
+        except (URLError, json.JSONDecodeError, KeyError, ValueError):
+            return None
+    return None
+
+
+# Границы Астаны с запасом. Всё, что вне их, — ошибка геокодера:
+# Байконыр это другой город (700 км), а «город Астана, район» без улицы
+# Nominatim иногда отдаёт Синьцзян. Такой маркер хуже, чем отсутствие
+# маркера, поэтому такие ответы отбрасываются.
+ASTANA_BBOX = (50.70, 51.45, 71.00, 71.70)
+
+
+def _in_astana(lat, lon):
+    return (lat is not None and lon is not None
+            and ASTANA_BBOX[0] <= lat <= ASTANA_BBOX[1]
+            and ASTANA_BBOX[2] <= lon <= ASTANA_BBOX[3])
+
+
+# Улица по-казахски. Суффиксы: көшесі — улица, даңғылы — проспект,
+# жолы — шоссе. Формы «көшелерінің қиылысы» — пересечение улиц.
+KK_STREET_SUFFIXES = (
+    "көшелерінің", "көшелері", "көшесі", "даңғылы", "даңғылдары",
+    "шағын жолы", "тас жолы", "жолы",
+)
+
+# Слова, которые в казахском названии идут перед улицей и адреса
+# не обозначают: «Астана қаласы, Есіл ауданы, …»
+KK_PREFIX_NOISE = re.compile(
+    r"^(?:[\w.]+\s+)?(?:қаласы|ауданы|аудан|республикасы)\b[^,]*$",
+    re.IGNORECASE)
+
+# Адрес внутри projectName.ru — по той же формулировке, что и в PDF
+RE_IN_NAME = re.compile(r"расположенн\w*\s+(?:по\s+адресу\s*:?|в\s+)", re.I)
+
+RU_STREET_RE = re.compile(
+    r"(?:улица|проспект|шоссе|переулок)\s+([^,]+)", re.IGNORECASE)
+
+
+def _tr(value):
+    return (value or {}).get("ru") if isinstance(value, dict) else (value or "")
+
+
+def _tk(value):
+    return (value or {}).get("kk") if isinstance(value, dict) else (value or "")
+
+
+def kk_street_from_name(name_kk):
+    """
+    Вытаскивает казахское название улицы из projectName.kk.
+
+    Строка вида «Астана қаласы, Есіл ауданы, Тұрар Рысқұлов көшесі,
+    4-учаске…» режется по запятым и берётся кусок с суффиксом улицы.
+    Разбор по запятым надёжнее регулярки: в названии много слов через
+    пробел, а `\w` пробел не берёт, и регулярка вытаскивала один
+    только суффикс — «көшесі» вместо «Тұрар Рысқұлов көшесі».
+    """
+    if not name_kk:
+        return None
+
+    for part in name_kk.split(","):
+        part = re.sub(r"\s+", " ", part).strip(" .«»\"'")
+        if not part:
+            continue
+        if any(part.endswith(sfx) for sfx in KK_STREET_SUFFIXES):
+            if not KK_PREFIX_NOISE.match(part):
+                return part
+
+    return None
+
+
+def geocode_candidates(item):
+    """
+    Варианты адреса для геокодирования — от точного к приблизительному.
+
+    Нужен потому, что поле location часто содержит только район:
+    у 38 объектов из 135 адреса не геокодировались, причём точный
+    адрес лежал в projectName — по-русски и по-казахски.
+
+    Русские названия улиц Nominatim по Казахстану почти не знает
+    («Турара Рыскулова» не находит), а казахские находит («Тұрар
+    Рысқұлов көшесі»). Поэтому казахский вариант идёт первым.
+    """
+    loc_ru = _tr(item.get("location")).strip()
+    name_ru = _tr(item.get("projectName"))
+    name_kk = _tk(item.get("projectName"))
+
+    out = []
+
+    # 1. Казахская улица из названия проекта — Nominatim её знает.
+    street_kk = kk_street_from_name(name_kk)
+    if street_kk:
+        district = re.search(r"([^,]+)\s+ауданы", name_kk or "")
+        q = street_kk + (f", {district.group(1)} ауданы" if district else "")
+        out.append(q + ", Астана")
+
+    # 2. Точный адрес из названия проекта, если это действительно адрес.
+    m = RE_IN_NAME.search(name_ru)
+    if m:
+        addr = re.split(r"[»\"]", name_ru[m.end():])[0].strip(" .,")
+        # Короткий фрагмент с улицей; длинный — это описание проекта,
+        # и Nominatim по нему уходит куда угодно.
+        if addr and len(addr) <= 120 and RU_STREET_RE.search(addr):
+            out.append(addr)
+
+    # 3. Поле location как есть.
+    if loc_ru:
+        out.append(loc_ru)
+
+    # 4. Район — грубо, но лучше, чем ничего.
+    district = loc_ru.split("город Астана,")[-1].strip(" ,")
+    district = re.sub(r"^Республика Казахстан,?\s*", "", district)
+    if district:
+        out.append(f"Астана, {district}")
+
+    # Убираем повторы, сохраняя порядок
+    seen, uniq = set(), []
+    for q in out:
+        key = q.lower()
+        if q and key not in seen:
+            seen.add(key)
+            uniq.append(q)
+    return uniq
+
+
+def geocode_zhk(item):
+    """
+    Геокодирует объект реестра, перебирая варианты адреса.
+    Ответы вне границ Астаны отбрасываются.
+    """
+    for query in geocode_candidates(item):
+        hit = _nominatim_request({
+            "q": query,
+            "format": "json",
+            "limit": 1,
+            "countrycodes": "kz",
+            "accept-language": "ru",
+        })
+        if not hit:
+            continue
+        lat, lon, display = hit
+        if _in_astana(lat, lon):
+            return lat, lon, display, query
+        # Вне Астаны — пробуем следующий вариант
+    return None, None, None, None
 
 
 def _dadata_get_bin(customer_name):
@@ -348,6 +540,25 @@ def cache_get_geo(address):
     if row is None or row["lat"] is None:
         return None
     return row["lat"], row["lon"], row["display"]
+
+
+def cache_get_geo_checked(address):
+    """
+    Координаты из кэша, только если они внутри Астаны.
+
+    Проверка нужна и на чтении: однажды в кэш попала точка в
+    Мангистау (43.64, 51.40) — Nominatim так ищет «улица А 103»
+    в Астане, а находит одноимённую улицу в другом регионе. Если
+    такую запись не отбросить при чтении, она будет вечно выводиться
+    на карту мимо всех проверок.
+    """
+    cached = cache_get_geo(address)
+    if not cached:
+        return None
+    lat, lon, display = cached
+    if not _in_astana(lat, lon):
+        return None
+    return cached
 
 
 def cache_put_geo(address, lat, lon, display):
@@ -450,6 +661,19 @@ def stream_zhk():
     def sse(event, data):
         return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+    # Тестовый режим: отдаём фикстуру, никуда не ходя
+    if TEST_MODE:
+        items = fixture_zhk()
+        yield sse("meta", {"total": len(items), "test": True})
+        for i, zhk in enumerate(items, 1):
+            yield sse("progress", {"index": i, "total": len(items),
+                                   "address": (zhk.get("address") or "")[:80],
+                                   "stage": "geo"})
+            yield sse("zhk", zhk)
+        _store_zhk_cache(items)
+        yield sse("done", {"shown": len(items), "total": len(items)})
+        return
+
     try:
         items = _fetch_raw_items()
     except Exception as e:
@@ -468,13 +692,16 @@ def stream_zhk():
         customer = ((it.get("customerName") or {}).get("ru") or "").strip()
 
         # --- Геокодирование ---
-        cached = cache_get_geo(address)
+        cached = cache_get_geo_checked(address)
         if cached:
             lat, lon, display = cached
         else:
             yield sse("progress", {"index": i + 1, "total": total,
                                    "address": address[:80], "stage": "geo"})
-            lat, lon, display = _nominatim_geocode(address)
+            # Каскад вариантов: поле location часто содержит только
+            # район, и точная улица лежит в projectName — по-русски
+            # и по-казахски. Плюс проверка, что попали в Астану.
+            lat, lon, display, _used = geocode_zhk(it)
             cache_put_geo(address, lat, lon, display)
             time.sleep(NOMINATIM_DELAY)
 
@@ -509,17 +736,22 @@ def stream_zhk():
 
 
 def build_full_list():
+    if TEST_MODE:
+        return fixture_zhk()
+
     items = _fetch_raw_items()
     result = []
     for it in items:
         address = ((it.get("location") or {}).get("ru") or "").strip()
         customer = ((it.get("customerName") or {}).get("ru") or "").strip()
 
-        cached = cache_get_geo(address)
+        cached = cache_get_geo_checked(address)
         if cached:
             lat, lon, display = cached
         else:
-            lat, lon, display = _nominatim_geocode(address)
+            # Тот же каскад, что и в stream_zhk: поле location часто
+            # содержит только район, а точный адрес лежит в projectName.
+            lat, lon, display, _used = geocode_zhk(it)
             cache_put_geo(address, lat, lon, display)
             time.sleep(NOMINATIM_DELAY)
 
@@ -1361,6 +1593,13 @@ class Handler(SimpleHTTPRequestHandler):
         query = parse_qs(urlsplit(self.path).query)
         use_geo = (query.get("geocode") or ["1"])[0] not in ("0", "false", "no")
 
+        # Тестовый режим: отдаём сохранённый ответ целиком
+        if TEST_MODE:
+            fixed = load_fixture("licenses.json")
+            if fixed:
+                self._send_json(200, {"success": True, "test": True, **fixed})
+                return
+
         # Сборка списка ЖК занимает минуты (Nominatim с паузами). Обычно
         # список уже в кэше — его положил SSE-поток. Если кэш холодный,
         # честно отвечаем 503, а не висим молча.
@@ -1490,6 +1729,13 @@ if __name__ == "__main__":
     print(f"  база: {db.path} ({db_info['size_bytes'] // 1024} КБ)")
     for table, count in db_info["tables"].items():
         print(f"    {table:24} {count}")
+
+    if TEST_MODE:
+        n_zhk = len(fixture_zhk())
+        has_lic = load_fixture("licenses.json") is not None
+        print(f"\n*** ТЕСТОВЫЙ РЕЖИМ: данные из {TESTDATA_DIR}/ "
+              f"(ЖК: {n_zhk}, даты: {'есть' if has_lic else 'нет'}).")
+        print("*** qportal, геокодирование и elicense.kz не вызываются.")
 
     print(f"SSE-поток:      http://localhost:{port}/api/zhk/stream")
     print(f"Полный список:  http://localhost:{port}/api/zhk")

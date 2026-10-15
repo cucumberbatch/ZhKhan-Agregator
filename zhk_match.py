@@ -528,10 +528,12 @@ def match_notifications(notifications, zhk_list, geocode=None,
                 stats["rejected_by_address"] += 1
             unmatched.append({
                 "bin": notif.get("applicant_bin") or notif.get("bin"),
+                "company": notif.get("applicant") or notif.get("licensiat"),
                 "nikad": notif.get("nikad"),
                 "address": notif.get("address"),
                 "object_name": notif.get("object_name"),
                 "issue_date": notif.get("issue_date_iso"),
+                "detail_url": notif.get("detail_url"),
                 "reason": res.get("rejected"),
             })
             continue

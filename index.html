@@ -158,6 +158,289 @@
             letter-spacing: -.005em;
         }
 
+        /* ---------- Группа объектов на одном адресе ---------- */
+        .group {
+            margin-bottom: 10px;
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            overflow: hidden;
+        }
+        .group-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 14px;
+            cursor: pointer;
+            background: #f6f7f9;
+            border-bottom: 1px solid var(--border);
+            user-select: none;
+        }
+        .group-head:hover { background: #eef0f3; }
+        .group-caret {
+            width: 0; height: 0;
+            border-left: 5px solid var(--text-soft);
+            border-top: 4px solid transparent;
+            border-bottom: 4px solid transparent;
+            transition: transform .15s;
+            flex: none;
+        }
+        .group.collapsed .group-caret { transform: rotate(-90deg); }
+        .group-addr {
+            flex: 1;
+            font-size: 12.5px;
+            color: var(--text);
+            line-height: 1.35;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .group-count {
+            flex: none;
+            font-size: 11.5px;
+            font-weight: 600;
+            color: #16a34a;
+            background: rgba(22,163,74,.10);
+            border-radius: 10px;
+            padding: 2px 8px;
+            white-space: nowrap;
+        }
+        .group-body {
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .group.collapsed .group-body { display: none; }
+        .group-body .card { margin-bottom: 0; }
+
+        /* Бейдж с числом объектов на маркере группы */
+        .group-icon {
+            background: #16a34a;
+            color: #fff;
+            border: 2px solid #fff;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12.5px;
+            font-weight: 700;
+            box-shadow: 0 2px 6px rgba(0,0,0,.3);
+        }
+        .group-icon.blue { background: #6b7280; }
+
+        /* ---------- Сортировка ---------- */
+        .sort-wrap {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 10px;
+        }
+        .sort-wrap label {
+            font-size: 12px;
+            color: var(--text-soft);
+            flex: none;
+        }
+        .sort-wrap select {
+            flex: 1;
+            min-width: 0;
+            font: inherit;
+            font-size: 12.5px;
+            color: var(--text);
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 6px 8px;
+            cursor: pointer;
+        }
+        .sort-wrap select:hover { border-color: var(--border-2); }
+
+        /* ---------- Переключатель вида ---------- */
+        .view-toggle {
+            display: flex;
+            gap: 2px;
+            margin-top: 10px;
+            padding: 3px;
+            background: #eceef1;
+            border-radius: 9px;
+        }
+        .view-toggle button {
+            flex: 1;
+            font: inherit;
+            font-size: 12.5px;
+            color: var(--text-soft);
+            background: transparent;
+            border: 0;
+            border-radius: 7px;
+            padding: 6px 8px;
+            cursor: pointer;
+        }
+        .view-toggle button.active {
+            background: var(--surface);
+            color: var(--text);
+            font-weight: 600;
+            box-shadow: 0 1px 2px rgba(0,0,0,.08);
+        }
+
+        /* ---------- Дерево по застройщикам ---------- */
+        .tree-dev {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: var(--surface);
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+        .tree-dev.active { border-color: var(--accent); }
+        .tree-dev-head {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 12px;
+            cursor: pointer;
+        }
+        .tree-dev-head:hover { background: #f6f7f9; }
+        .tree-dev-name {
+            flex: 1;
+            min-width: 0;
+            font-size: 12.5px;
+            font-weight: 600;
+            color: var(--text);
+            line-height: 1.35;
+        }
+        .tree-bin {
+            font-size: 11px;
+            color: var(--text-soft);
+            background: #eceef1;
+            border-radius: 4px;
+            padding: 1px 5px;
+            flex: none;
+        }
+        .tree-branch { border-top: 1px solid var(--border); }
+        .tree-branch-head {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 7px 12px;
+            font-size: 11.5px;
+            font-weight: 600;
+            color: var(--text-soft);
+            cursor: pointer;
+            user-select: none;
+        }
+        .tree-branch-head:hover { background: #f6f7f9; }
+        .tree-branch-tag {
+            font-size: 10.5px;
+            font-weight: 700;
+            padding: 1px 7px;
+            border-radius: 9px;
+        }
+        .tag-date { color: #16a34a; background: rgba(22,163,74,.12); }
+        .tag-nodate { color: #6b7280; background: #eceef1; }
+        .tag-orphan { color: #b45309; background: rgba(217,119,6,.14); }
+        .tree-items { padding: 2px 12px 10px; }
+        .tree-branch.closed .tree-items,
+        .tree-branch.closed .tree-caret { display: none; }
+        .tree-caret {
+            width: 0; height: 0;
+            border-left: 5px solid var(--text-soft);
+            border-top: 4px solid transparent;
+            border-bottom: 4px solid transparent;
+            transition: transform .15s;
+            flex: none;
+        }
+        .tree-branch.closed .tree-caret { transform: rotate(-90deg); }
+
+        .tree-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            font: inherit;
+            padding: 7px 0;
+            border-top: 1px solid #f0f1f3;
+            cursor: pointer;
+            background: none;
+            border-left: 0; border-right: 0; border-bottom: 0;
+        }
+        .tree-item:hover .tree-item-title { color: #16a34a; }
+        .tree-item-title {
+            font-size: 12.5px;
+            color: var(--text);
+            line-height: 1.35;
+        }
+        .tree-item-sub {
+            font-size: 11.5px;
+            color: var(--text-soft);
+            line-height: 1.4;
+            margin-top: 2px;
+        }
+        .tree-item-date {
+            display: inline-block;
+            font-size: 11px;
+            font-weight: 700;
+            color: #16a34a;
+            background: rgba(22,163,74,.12);
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-right: 6px;
+        }
+        .tree-item-date.none { color: #6b7280; background: #eceef1; }
+        .tree-orphan-note {
+            font-size: 11px;
+            color: #b45309;
+            margin-top: 3px;
+        }
+        .tree-orphan-link {
+            font-size: 11px;
+            color: #2563eb;
+            text-decoration: none;
+            margin-left: 8px;
+        }
+        .tree-orphan-link:hover { text-decoration: underline; }
+
+        /* Подсветка маркеров выбранного застройщика */
+        .leaflet-marker-icon.dim { opacity: .22; transition: opacity .2s; }
+        .leaflet-marker-icon.hi  { opacity: 1; }
+
+        /* ---------- Попап группы: длинный список не должен ломать экран ---------- */
+        .zhk-popup-list {
+            max-height: 240px;
+            overflow-y: auto;
+            margin-top: 4px;
+        }
+        .zhk-popup-more {
+            display: block;
+            width: 100%;
+            margin-top: 8px;
+            padding: 6px;
+            font: inherit;
+            font-size: 12px;
+            font-weight: 600;
+            color: #16a34a;
+            background: rgba(22,163,74,.08);
+            border: 1px solid rgba(22,163,74,.25);
+            border-radius: 7px;
+            cursor: pointer;
+        }
+        .zhk-popup-more:hover { background: rgba(22,163,74,.15); }
+
+        /* Строки внутри попапа группы */
+        .zhk-popup-row {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid var(--border);
+            font-size: 12px;
+            line-height: 1.4;
+        }
+        .zhk-popup-row b { display: block; color: var(--text); }
+        .zhk-popup-row span { display: block; color: var(--text-soft); }
+        .zhk-popup-note {
+            margin-top: 4px;
+            font-size: 11.5px;
+            color: #16a34a;
+            font-weight: 600;
+        }
+
         /* ---------- Строка "label: value" ---------- */
         .copy-row {
             display: flex;
@@ -441,7 +724,22 @@
                         <line x1="21" y1="21" x2="16.65" y2="16.65"/>
                     </svg>
                     <input id="search" type="search"
-                           placeholder="Поиск по названию, адресу, заказчику…">
+                           placeholder="Поиск по названию, адресу, застройщику…">
+                </div>
+
+                <div class="sort-wrap">
+                    <label for="sort">Сортировка</label>
+                    <select id="sort">
+                        <option value="registry">Как в реестре</option>
+                        <option value="date">По дате начала СМР</option>
+                        <option value="developer">По застройщику</option>
+                    </select>
+                </div>
+            <div class="view-toggle" role="tablist">
+                    <button type="button" data-view="list"
+                            class="active" role="tab">По адресу</button>
+                    <button type="button" data-view="tree"
+                            role="tab">По застройщику</button>
                 </div>
             </header>
             <div id="list"></div>
@@ -510,8 +808,8 @@
             crossOrigin: true
         }).addTo(map);
 
-        // Маркеры: зелёный — данные есть, синий — уведомлений не найдено.
-        // Цвет выбирается по наличию даты начала строительства.
+        // Маркеры: зелёный — есть дата начала СМР, серый — уведомлений
+        // не найдено. Цвет выбирается по наличию даты.
         function makeIcon(color) {
             return L.icon({
                 iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
@@ -521,7 +819,28 @@
             });
         }
         const greenIcon = makeIcon('green');
-        const blueIcon  = makeIcon('blue');
+        const greyIcon  = makeIcon('grey');
+
+        // Маркер группы: круг с числом объектов на этом адресе.
+        function makeGroupIcon(n, withLicense) {
+            return L.divIcon({
+                className: '',
+                html: `<div class="group-icon${withLicense ? '' : ' blue'}">${n}</div>`,
+                // .blue здесь — историческое имя класса, означает «серый»:
+                // в группе зелёная, если хотя бы у одного объекта есть
+                // дата начала СМР
+                iconSize: [30, 30],
+                iconAnchor: [15, 15],
+                popupAnchor: [0, -16]
+            });
+        }
+
+        // Ключ группы: тот же адрес — та же группа.
+        // Нормализуем регистр и пробелы, чтобы «ул. Е 117» и «ул.  Е117»
+        // не разъехались по разным группам.
+        function groupKey(zhk) {
+            return (zhk.address || '').trim().toLowerCase().replace(/\s+/g, ' ');
+        }
 
         // ============================================================
         // 2. Данные
@@ -534,11 +853,24 @@
         // licensesById → { start_date, bin, company, notifications[] }
         const licensesById = new Map();
 
+        // Уведомления о начале СМР, которым не нашлось ЖК в реестре
+        // проектов: новостройка есть на elicense, но её ещё нет в
+        // qportal. Настоящие уведомления, показывать их больше негде,
+        // кроме отдельной ветки. Приходят из /api/licenses.
+        let orphanNotifs = [];
+
+        // Что показано в боковой панели:
+        //   'list' — карточки, сгруппированные по адресу;
+        //   'tree' — дерево по застройщикам.
+        let currentView = 'list';
+        let selectedBin = null;
+
         const listEl     = document.getElementById('list');
         const emptyEl    = document.getElementById('empty');
         const cntEl      = document.getElementById('cnt');
         const cntTotalEl = document.getElementById('cnt-total');
         const searchEl   = document.getElementById('search');
+        const sortEl     = document.getElementById('sort');
 
         // ============================================================
         // 3. Хелперы
@@ -673,7 +1005,7 @@
                     <b>${escapeHtml(cutTail(zhk.name)) || '—'}</b>
                     ${licenseBadge(zhk.id)}
                     ${copyRow('Адрес:', zhk.address)}
-                    ${copyRow('Заказчик:', zhk.customer)}
+                    ${copyRow('Застройщик:', zhk.customer)}
                     ${zhk.customer_bin ? copyRow('БИН:', zhk.customer_bin) : ''}
                     <div class="foot-row">
                         <span class="code">${escapeHtml(zhk.code) || ''}</span>
@@ -690,7 +1022,7 @@
                 <div class="title">${escapeHtml(cutTail(zhk.name)) || '—'}</div>
                 ${licenseBadge(zhk.id)}
                 ${copyRow('Адрес:', zhk.address)}
-                ${copyRow('Заказчик:', zhk.customer)}
+                ${copyRow('Застройщик:', zhk.customer)}
                 ${zhk.customer_bin ? copyRow('БИН:', zhk.customer_bin) : ''}
                 <div class="foot-row">
                     <span class="code">${escapeHtml(zhk.code) || ''}</span>
@@ -765,6 +1097,287 @@
         }
 
         // ============================================================
+        // 5a. Группировка по адресу
+        // ============================================================
+        // Объекты на одном адресе — это разные ЖК разных застройщиков
+        // (на «Жұмекен Нәжімеденова» их 12), и по одному маркеру на
+        // объект они накладываются в неразличимую кучу. Поэтому после
+        // загрузки всех данных маркеры схлопываются по адресу, а в
+        // списке объекты одного адреса объединяются под общий заголовок.
+        const groupsByKey = new Map();
+        const expandedGroups = new Set();   // ключи адресов с развёрнутым попапом
+
+        function pluralZhk(n) {
+            const m10 = n % 10, m100 = n % 100;
+            if (m10 === 1 && m100 !== 11) return n + ' объект';
+            if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) {
+                return n + ' объекта';
+            }
+            return n + ' объектов';
+        }
+
+        function groupPopupHtml(group) {
+            // На одном адресе бывает до 12 объектов, и полный список
+            // в попапе не помещается на экран. Поэтому показываем первые
+            // несколько, остальные — по кнопке, и дополнительно
+            // ограничиваем высоту прокруткой.
+            const LIMIT = 4;
+            const expanded = expandedGroups.has(group.key);
+            const shown = expanded ? group.items : group.items.slice(0, LIMIT);
+            const rest = group.items.length - shown.length;
+
+            const rows = shown.map(z =>
+                '<div class="zhk-popup-row">' +
+                '<b>' + (escapeHtml(cutTail(z.name)) || '—') + '</b>' +
+                '<span>' + escapeHtml(z.customer || '—') + '</span>' +
+                (z.customer_bin
+                    ? '<span class="code">' + escapeHtml(z.customer_bin) + '</span>'
+                    : '') +
+                '</div>').join('');
+
+            const word = pluralRu(group.items.length,
+                                  'объект', 'объекта', 'объектов');
+
+            return '<div class="zhk-popup">' +
+                   '<b>' + escapeHtml(group.address) + '</b>' +
+                   '<div class="zhk-popup-note">' +
+                       group.items.length + ' ' + word + ' на этом адресе</div>' +
+                   '<div class="zhk-popup-list">' + rows + '</div>' +
+                   (rest > 0
+                       ? '<button class="zhk-popup-more" data-group="' +
+                         encodeURIComponent(group.key) + '">показать ещё ' +
+                         rest + '</button>'
+                       : (expanded && group.items.length > LIMIT
+                           ? '<button class="zhk-popup-more" data-group="' +
+                             encodeURIComponent(group.key) + '">свернуть</button>'
+                           : '')) +
+                   '</div>';
+        }
+
+        // Кнопка «показать ещё» в попапе: список разворачивается по
+        // клику, без перерисовки самого попапа целиком.
+        document.addEventListener('click', (e) => {
+            const btn = e.target.closest('.zhk-popup-more');
+            if (!btn) return;
+            e.stopPropagation();
+
+            const key = decodeURIComponent(btn.dataset.group);
+            const group = groupsByKey.get(key);
+            if (!group) return;
+
+            if (expandedGroups.has(key)) expandedGroups.delete(key);
+            else expandedGroups.add(key);
+
+            group.marker.setPopupContent(groupPopupHtml(group));
+            group.marker.openPopup();
+        });
+
+        function buildGroups() {
+            // Раскладываем объекты по адресу, сохраняя порядок появления
+            const order = [];
+            const byKey = new Map();
+            zhkList.forEach(zhk => {
+                const key = groupKey(zhk);
+                if (!byKey.has(key)) {
+                    byKey.set(key, { key: key,
+                                     address: zhk.address || '—',
+                                     items: [] });
+                    order.push(key);
+                }
+                byKey.get(key).items.push(zhk);
+            });
+
+            // --- Маркеры: по одному на адрес ---
+            markersById.forEach(entry => {
+                if (map.hasLayer(entry.marker)) map.removeLayer(entry.marker);
+            });
+            markersById.clear();
+            groupsByKey.clear();
+
+            order.forEach(key => {
+                const group = byKey.get(key);
+                const first = group.items[0];
+                // Признак берём из licensesById, а не из разметки: карточка с
+                // датой появляется позже, чем строятся группы, и
+                // поиск по data-badge (которого в разметке нет) всегда
+                // давал «нет данных» — маркеры оставались серыми.
+                const hasLicense = group.items.some(z =>
+                    licensesById.has(z.id));
+
+                const marker = L.marker([first.lat, first.lon], {
+                    icon: group.items.length > 1
+                        ? makeGroupIcon(group.items.length, hasLicense)
+                        : (hasLicense ? greenIcon : greyIcon)
+                });
+
+                const entry = { key: key, address: group.address,
+                                items: group.items, marker: marker,
+                                el: null };
+                groupsByKey.set(key, entry);
+
+                marker.bindPopup(group.items.length > 1
+                    ? groupPopupHtml(group)
+                    : popupHtml(first));
+
+                marker.on('click', () => {
+                    if (group.items.length > 1 && entry.el) {
+                        entry.el.classList.remove('collapsed');
+                    }
+                    setActiveCard(first.id);
+                });
+                marker.addTo(map);
+
+                // Внутри группы запоминаем общий маркер, чтобы клик по
+                // карточке работал так же, как раньше
+                group.items.forEach(zhk => {
+                    markersById.set(zhk.id, { marker: marker, zhk: zhk });
+                });
+            });
+
+            // --- Список: карточки одного адреса под общим заголовком ---
+            const frag = document.createDocumentFragment();
+            order.forEach(key => {
+                const group = byKey.get(key);
+
+                if (group.items.length < 2) {
+                    group.items.forEach(z => {
+                        const card = cardsById.get(z.id);
+                        if (card) frag.appendChild(card);
+                    });
+                    return;
+                }
+
+                const el = document.createElement('div');
+                el.className = 'group';
+                el.dataset.key = key;
+
+                const head = document.createElement('div');
+                head.className = 'group-head';
+                head.innerHTML =
+                    '<span class="group-caret"></span>' +
+                    '<span class="group-addr">' +
+                        escapeHtml(group.address) + '</span>' +
+                    '<span class="group-count">' +
+                        pluralZhk(group.items.length) + '</span>';
+
+                const body = document.createElement('div');
+                body.className = 'group-body';
+                group.items.forEach(z => {
+                    const card = cardsById.get(z.id);
+                    if (card) body.appendChild(card);
+                });
+
+                head.addEventListener('click', (e) => {
+                    if (e.target.closest('.copy-btn')) return;
+                    el.classList.toggle('collapsed');
+                    if (!el.classList.contains('collapsed')) {
+                        map.setView(groupsByKey.get(key).marker.getLatLng(),
+                                    Math.max(map.getZoom(), 14),
+                                    { animate: true });
+                    }
+                });
+
+                el.appendChild(head);
+                el.appendChild(body);
+                frag.appendChild(el);
+                groupsByKey.get(key).el = el;
+            });
+
+            listEl.innerHTML = '';
+            listEl.appendChild(frag);
+        }
+
+        // ============================================================
+        // 5b. Сортировка списка
+        // ============================================================
+        // Сортируются блоки (одиночная карточка или группа по адресу),
+        // а внутри группы — сами карточки. Блоки переиспользуются:
+        // карточки переносится по DOM, обработчики и класс active
+        // при этом сохраняются.
+        function startDateOf(zhk) {
+            const lic = licensesById.get(zhk.id);
+            return (lic && lic.start_date) || null;
+        }
+
+        function cmpDeveloper(a, b) {
+            return (a.customer || '').localeCompare(b.customer || '', 'ru');
+        }
+
+        function cmpStartDate(a, b) {
+            const da = startDateOf(a), db = startDateOf(b);
+            // Без уведомлений — в конец: дата неизвестна, сортировать
+            // такие объекты между собой бессмысленно.
+            if (!da && !db) return 0;
+            if (!da) return 1;
+            if (!db) return -1;
+            return da < db ? -1 : (da > db ? 1 : 0);
+        }
+
+        // Ключ блока: для группы — самая ранняя дата среди её объектов,
+        // иначе сравнивать блоки между собой было бы нечем.
+        function blockDate(g) {
+            const dates = g.items.map(startDateOf).filter(Boolean).sort();
+            return dates.length ? dates[0] : null;
+        }
+
+        function blockDeveloper(g) {
+            const names = g.items.map(z => z.customer || '')
+                .sort((a, b) => a.localeCompare(b, 'ru'));
+            return names.length ? names[0] : '';
+        }
+
+        function sortList(mode) {
+            const blocks = Array.from(groupsByKey.values());
+
+            if (mode === 'developer' || mode === 'date') {
+                const cmp = mode === 'developer' ? cmpDeveloper : cmpStartDate;
+                blocks.forEach(g => {
+                    if (g.items.length > 1) g.items.sort(cmp);
+                });
+            }
+
+            if (mode === 'developer') {
+                blocks.sort((a, b) => {
+                    const r = blockDeveloper(a).localeCompare(
+                        blockDeveloper(b), 'ru');
+                    return r || a.key.localeCompare(b.key, 'ru');
+                });
+            } else if (mode === 'date') {
+                blocks.sort((a, b) => {
+                    const da = blockDate(a), db = blockDate(b);
+                    if (!da && !db) return a.key.localeCompare(b.key, 'ru');
+                    if (!da) return 1;
+                    if (!db) return -1;
+                    return da < db ? -1 : (da > db ? 1 : 0);
+                });
+            }
+            // mode === 'registry' — порядок реестра, ничего не трогаем
+
+            const frag = document.createDocumentFragment();
+            blocks.forEach(g => {
+                if (g.items.length < 2) {
+                    const card = cardsById.get(g.items[0].id);
+                    if (card) frag.appendChild(card);
+                } else {
+                    const body = g.el.querySelector('.group-body');
+                    g.items.forEach(z => {
+                        const card = cardsById.get(z.id);
+                        if (card) body.appendChild(card);
+                    });
+                    frag.appendChild(g.el);
+                    // Попап показывает объекты в том же порядке
+                    if (g.marker.getPopup()) {
+                        g.marker.setPopupContent(groupPopupHtml(g));
+                    }
+                }
+            });
+
+            listEl.innerHTML = '';
+            listEl.appendChild(frag);
+            applyFilter();
+        }
+
+        // ============================================================
         // 5.5 Данные elicense.kz: подтягиваем даты и красим маркеры
         // ============================================================
         function applyLicenses(licenses) {
@@ -775,13 +1388,13 @@
 
             let painted = 0;
 
-            markersById.forEach(({ marker, zhk }, id) => {
+            // Иконку маркера здесь НЕ трогаем: после группировки одному
+            // адресу соответствует один маркер на несколько объектов,
+            // и setIcon по объекту затирал бы иконку группы с числом.
+            // Цвет пересчитывается ниже, по группам.
+            markersById.forEach(({ zhk }, id) => {
                 if (!licensesById.has(id)) return;
-                marker.setIcon(greenIcon);
                 painted++;
-
-                // Обновляем попап маркера
-                if (marker.getPopup()) marker.setPopupContent(popupHtml(zhk));
 
                 // В карточке меняем только сам бейдж, карточку не пересоздаём —
                 // иначе теряется класс active и навешиваются дубли обработчиков
@@ -798,18 +1411,55 @@
                 }
             });
 
+            // Попапы и иконки маркеров — целиком по группам
+            groupsByKey.forEach(g => {
+                const hasLicense = g.items.some(z => licensesById.has(z.id));
+                const isGroup = g.items.length > 1;
+                g.marker.__isGroup = isGroup;
+                g.marker.setIcon(isGroup
+                    ? makeGroupIcon(g.items.length, hasLicense)
+                    : (hasLicense ? greenIcon : greyIcon));
+                if (g.marker.getPopup()) {
+                    g.marker.setPopupContent(isGroup
+                        ? groupPopupHtml(g)
+                        : popupHtml(g.items[0]));
+                }
+            });
+
             if (painted) console.log(`[elicense] окрашено маркеров: ${painted}`);
+
+            // Даты приходят после списка, поэтому сортировку по дате
+            // пересчитываем ещё раз — иначе порядок был бы по пустым
+            // значениям.
+            if (groupsByKey.size) sortList(sortEl.value);
+
             return painted;
         }
 
         async function loadLicenses() {
-            try {
-                const res = await fetch('/api/licenses');
+            // Сервер отдаёт 503, если список ЖК ещё не собран. Так бывает
+            // и сразу после окончания SSE: сборка может занять больше
+            // времени жизни кэша, и к моменту запроса он протухает.
+            // Повторяем с ?wait=1 — пересборка идёт по кэшу геокодирования
+            // и занимает секунды.
+            const tryLoad = async (withWait) => {
+                const res = await fetch('/api/licenses' + (withWait ? '?wait=1' : ''));
+                if (res.status === 503) return null;
                 if (!res.ok) throw new Error('HTTP ' + res.status);
                 const data = await res.json();
                 if (!data.success) throw new Error(data.message || 'ошибка');
+                return data;
+            };
+
+            try {
+                let data = await tryLoad(false);
+                if (!data) data = await tryLoad(true);
+                if (!data) throw new Error('список ЖК не собран');
 
                 const painted = applyLicenses(data.licenses);
+                orphanNotifs = data.unmatched || [];
+                if (currentView === 'tree') renderTree();
+
                 const s = data.stats || {};
                 console.log(`[elicense] уведомлений: ${s.notifications}, ` +
                             `по БИН: ${s.matched_bin}, по адресу: ${s.matched_geocode}, ` +
@@ -828,6 +1478,206 @@
         // ============================================================
         // 6. Поиск
         // ============================================================
+        const closedBranches = new Set();
+
+        function treeItemHtml(zhk) {
+            const lic = licensesById.get(zhk.id);
+            const date = lic ? formatDateRu(lic.start_date) : null;
+            return '<button type="button" class="tree-item" data-id="' +
+                escapeHtml(zhk.id) + '">' +
+                '<div class="tree-item-title">' +
+                    (date
+                        ? '<span class="tree-item-date">' +
+                          escapeHtml(date) + '</span>'
+                        : '<span class="tree-item-date none">без даты</span>') +
+                    escapeHtml(cutTail(zhk.name) || '—') +
+                '</div>' +
+                '<div class="tree-item-sub">' +
+                    escapeHtml(zhk.address || '') + '</div>' +
+                '</button>';
+        }
+
+        function treeOrphanHtml(n) {
+            const link = n.detail_url
+                ? '<a class="tree-orphan-link" target="_blank" href="' +
+                  escapeHtml(n.detail_url) +
+                  '" onclick="event.stopPropagation()">elicense</a>'
+                : '';
+            return '<div class="tree-item">' +
+                '<div class="tree-item-title">' +
+                    '<span class="tree-item-date">' +
+                        escapeHtml(formatDateRu(n.issue_date) || '—') +
+                    '</span>' +
+                    escapeHtml(cutTail(n.object_name) || 'уведомление') +
+                '</div>' +
+                '<div class="tree-item-sub">' +
+                    escapeHtml(n.address || 'адрес не извлечён') + link +
+                '</div>' +
+                '<div class="tree-orphan-note">Объекта нет в реестре ' +
+                    'проектов — ЖК на карте не показан</div>' +
+                '</div>';
+        }
+
+        function branchHtml(id, label, count, tagClass, bodyHtml) {
+            const closed = closedBranches.has(id);
+            return '<div class="tree-branch' + (closed ? ' closed' : '') +
+                '" data-branch="' + escapeHtml(id) + '">' +
+                '<div class="tree-branch-head">' +
+                    '<span class="tree-caret"></span>' +
+                    '<span class="tree-branch-tag ' + tagClass + '">' +
+                        count + '</span>' +
+                    '<span>' + escapeHtml(label) + '</span>' +
+                '</div>' +
+                '<div class="tree-items">' + bodyHtml + '</div>' +
+                '</div>';
+        }
+
+        function renderTree() {
+            // Раскладываем ЖК и уведомления-сироты по застройщику
+            const devs = new Map();
+            zhkList.forEach(z => {
+                const key = z.customer_bin || ('n:' + (z.customer || '—'));
+                if (!devs.has(key)) {
+                    devs.set(key, {
+                        key: key, bin: z.customer_bin || null,
+                        name: z.customer || 'Застройщик не указан',
+                        zhk: [], orphans: []
+                    });
+                }
+                devs.get(key).zhk.push(z);
+            });
+
+            // Застройщик, у которого в реестре нет ни одного ЖК,
+            // но есть уведомления, тоже должен быть виден
+            orphanNotifs.forEach(n => {
+                const key = n.bin || ('n:' + (n.company || '—'));
+                if (!devs.has(key)) {
+                    devs.set(key, {
+                        key: key, bin: n.bin || null,
+                        name: n.company || 'Застройщик не указан',
+                        zhk: [], orphans: []
+                    });
+                }
+                devs.get(key).orphans.push(n);
+            });
+
+            const list = Array.from(devs.values()).sort((a, b) =>
+                a.name.localeCompare(b.name, 'ru'));
+
+            const frag = document.createDocumentFragment();
+            list.forEach(dev => {
+                const el = document.createElement('div');
+                el.className = 'tree-dev';
+                if (dev.bin && dev.bin === selectedBin) el.classList.add('active');
+
+                const head = document.createElement('div');
+                head.className = 'tree-dev-head';
+                head.innerHTML =
+                    '<span class="tree-caret"></span>' +
+                    '<span class="tree-dev-name">' +
+                        escapeHtml(dev.name) + '</span>' +
+                    (dev.bin ? '<span class="tree-bin">' +
+                              escapeHtml(dev.bin) + '</span>' : '');
+
+                const withDate = dev.zhk.filter(z => licensesById.has(z.id))
+                    .sort((a, b) => (startDateOf(a) || '9999')
+                        .localeCompare(startDateOf(b) || '9999'));
+                const noDate = dev.zhk.filter(z => !licensesById.has(z.id));
+                const orphans = dev.orphans.slice().sort((a, b) =>
+                    (a.issue_date || '9999').localeCompare(b.issue_date || '9999'));
+
+                head.addEventListener('click', () => {
+                    // Повторный клик по тому же застройщику снимает выбор
+                    selectedBin = (dev.bin && dev.bin === selectedBin)
+                        ? null : dev.bin;
+                    highlightMarkers();
+                    renderTree();
+                });
+                el.appendChild(head);
+
+                if (withDate.length) {
+                    el.insertAdjacentHTML('beforeend', branchHtml(
+                        'd:' + dev.key, 'ЖК с датой начала СМР',
+                        withDate.length, 'tag-date',
+                        withDate.map(treeItemHtml).join('')));
+                }
+                if (noDate.length) {
+                    el.insertAdjacentHTML('beforeend', branchHtml(
+                        'n:' + dev.key, 'ЖК без даты',
+                        noDate.length, 'tag-nodate',
+                        noDate.map(treeItemHtml).join('')));
+                }
+                if (orphans.length) {
+                    el.insertAdjacentHTML('beforeend', branchHtml(
+                        'o:' + dev.key, 'Уведомления без ЖК в реестре',
+                        orphans.length, 'tag-orphan',
+                        orphans.map(treeOrphanHtml).join('')));
+                }
+                frag.appendChild(el);
+            });
+
+            listEl.innerHTML = '';
+            listEl.appendChild(frag);
+            bindTreeHandlers();
+            applyFilter();
+        }
+
+        function bindTreeHandlers() {
+            listEl.querySelectorAll('.tree-branch-head').forEach(h => {
+                h.addEventListener('click', () => {
+                    const branch = h.closest('.tree-branch');
+                    const id = branch.dataset.branch;
+                    if (closedBranches.has(id)) closedBranches.delete(id);
+                    else closedBranches.add(id);
+                    branch.classList.toggle('closed');
+                });
+            });
+            listEl.querySelectorAll('.tree-item[data-id]').forEach(b => {
+                b.addEventListener('click', () => focusOnZhk(b.dataset.id));
+            });
+        }
+
+        // Подсветка маркеров выбранного застройщика: остальные гаснут,
+        // но не исчезают — так видна и общая картина, и выбранный.
+        function highlightMarkers() {
+            markersById.forEach(function(entry) {
+                var el = entry.marker.getElement();
+                if (!el) return;
+                if (!selectedBin) {
+                    el.classList.remove('dim', 'hi');
+                } else if (entry.zhk.customer_bin === selectedBin) {
+                    el.classList.remove('dim');
+                    el.classList.add('hi');
+                } else {
+                    el.classList.add('dim');
+                    el.classList.remove('hi');
+                }
+            });
+        }
+
+        // Переключение вида: список по адресу и дерево по застройщикам
+        // делят один контейнер
+        document.querySelectorAll('.view-toggle button').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                currentView = btn.dataset.view;
+                document.querySelectorAll('.view-toggle button')
+                    .forEach(function(b) { b.classList.toggle('active', b === btn); });
+
+                // Сортировка относится только к списку по адресу
+                var sw = document.querySelector('.sort-wrap');
+                if (sw) sw.style.display = currentView === 'list' ? '' : 'none';
+
+                if (currentView === 'tree') {
+                    selectedBin = null;
+                    highlightMarkers();
+                    renderTree();
+                } else {
+                    buildGroups();
+                    sortList(sortEl.value);
+                }
+            });
+        });
+
         function applyFilter() {
             const q = searchEl.value.trim().toLowerCase();
             let visibleCount = 0;
@@ -856,10 +1706,19 @@
                 }
             });
 
+            // Групповой заголовок прячем, только если скрыты все объекты
+            // внутри: иначе остаётся шапка без содержимого.
+            listEl.querySelectorAll('.group').forEach(el => {
+                const hidden = Array.from(el.querySelectorAll('.card'))
+                    .every(c => c.style.display === 'none');
+                el.style.display = hidden ? 'none' : '';
+            });
+
             emptyEl.style.display = visibleCount === 0 ? 'block' : 'none';
             cntEl.textContent = visibleCount;
         }
         searchEl.addEventListener('input', applyFilter);
+        sortEl.addEventListener('change', () => sortList(sortEl.value));
 
         // ============================================================
         // 7. SSE
@@ -895,8 +1754,12 @@
 
         es.addEventListener('done', e => {
             es.close();
+            // Схлопываем объекты по адресу: пока стриминг шёл, маркеры
+            // были по одному на объект, и одинаковые адреса накладывались
+            buildGroups();
             applyFilter();
-            console.log('SSE завершён:', e.data);
+            console.log('SSE завершён:', e.data,
+                        'групп по адресу:', groupsByKey.size);
             // Подтягиваем даты начала строительства отдельным запросом
             loadLicenses();
         });
