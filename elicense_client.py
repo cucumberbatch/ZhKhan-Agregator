@@ -14,6 +14,13 @@
   * Chromium по умолчанию headless, переключается флагом или переменной
   * после успешного входа догружаются все страницы выдачи
   * браузер живёт в выделенном потоке: sync_api Playwright не потокобезопасен
+  * есть фильтр «Дата выдачи» — удобно для среза свежих уведомлений
+
+Схема скачивания PDF (капча для неё НЕ нужна):
+    /Licenses/GetFileListByDocument?guid=<guid>   → список языковых версий
+    /licenses/DownloadFileById/<guid>?documentId=<id>  → сам файл
+Русскую версию выбираем по полю Lang == "ru", а не по тексту кнопки:
+без cookie lang сайт отдаёт казахские названия.
 
 Playwright и ddddocr импортируются лениво: без них модуль
 остаётся импортируемым, а ошибка возникает только при реальном поиске.
@@ -21,13 +28,17 @@ Playwright и ddddocr импортируются лениво: без них м�
 
 import os
 import queue
+import re
 import threading
 import time
+from datetime import date, datetime, timedelta
 from urllib.parse import urljoin, urlsplit, urlunsplit, parse_qsl, urlencode
 
 from elicense_html_parser import (
+    NOTIFICATION_MARKER,
     is_empty_result,
     parse_elicense_results,
+    sort_notifications,
     summarize,
     total_pages,
 )
@@ -47,6 +58,80 @@ CAPTCHA_IMAGE = "#ExampleCaptcha_CaptchaImage"
 SUBMIT = 'input[type="submit"]'
 RESULT_TABLE = "table#table__content__body"
 
+# Поиск по лицензиату — наименованию заказчика из реестра qportal.
+# Это позволяет обойтись без определения БИН: название берётся прямо
+# из проекта, а БИН застройщика потом вытаскивается из PDF уведомления.
+LICENSIAT_INPUT = "#LicensiatStr"
+LICENSIAT_SELECT = "#LicensiatEquality"
+
+# Операторы «Лицензиат» — те же битовые маски, что и у «Дата выдачи».
+# По умолчанию «Равно»: в реестре qportal и в выдаче elicense хранится
+# одно и то же полное наименование.
+LICENSIAT_EQUALITY = {
+    "eq": "1",     # Равно
+    "gt": "4",     # Больше
+    "lt": "8",     # Меньше
+    "lte": "16",   # Не больше
+    "gte": "32",   # Не меньше
+}
+
+# Фильтр «Дата выдачи». На сайте это пара: select с оператором
+# (битовая маска) + input[type=date] со значением в формате ГГГГ-ММ-ДД.
+DATE_INPUT = "#DateIssueStr"
+DATE_SELECT = "#DateIssueEquality"
+DATE_EQUALITY = {
+    "eq": "1",     # Равно
+    "gt": "4",     # Больше
+    "lt": "8",     # Меньше
+    "lte": "16",   # Не больше
+    "gte": "32",   # Не меньше
+}
+
+
+def iso_date(value):
+    """Принимает date/datetime/строку и возвращает 'ГГГГ-ММ-ДД'."""
+    if value is None:
+        return None
+    if isinstance(value, (datetime, date)):
+        return value.isoformat()[:10]
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(value))
+    if m:
+        return m.group(0)
+    m = re.search(r"(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})", str(value))
+    if m:
+        return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}"
+    return None
+
+
+def days_ago(n, today=None):
+    """Дата n дней назад — для фильтра «за последние N дней»."""
+    base = today or datetime.now()
+    return (base - timedelta(days=int(n))).isoformat()[:10]
+
+
+def months_ago(n, today=None):
+    """
+    Дата n месяцев назад — для фильтра «за последние N месяцев».
+
+    Считаем по календарю, а не как «30 дней за месяц»: в три месяца
+    бывает 90–92 дня, и на коротком окне это уже одна лишняя неделя.
+    """
+    base = today or datetime.now()
+    months = int(n)
+
+    year, month = base.year, base.month - months
+    while month <= 0:
+        month += 12
+        year -= 1
+
+    day = base.day
+    while True:
+        try:
+            return date(year, month, day).isoformat()
+        except ValueError:
+            # 31 марта минус месяц → 31 февраля не бывает
+            day -= 1
+
 USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
@@ -54,6 +139,28 @@ _ocr_lock = threading.Lock()
 _ocr_instance = None
 
 
+BASE_URL = "https://elicense.kz"
+
+# Страница карточки документа. Русская версия — параметром lang=ru.
+DETAIL_URL = BASE_URL + "/Licenses/Details/{guid}?lang=ru"
+FILE_LIST_API = BASE_URL + "/Licenses/GetFileListByDocument?guid={guid}"
+DOWNLOAD_API = BASE_URL + "/licenses/DownloadFileById/{guid}?documentId={doc}"
+
+# Из ссылки на карточку достаём идентификатор документа
+GUID_IN_URL = re.compile(r"/Details/([0-9a-fA-F-]{36})")
+
+
+def guid_from_url(url):
+    """Достаёт GUID документа из ссылки на карточку."""
+    if not url:
+        return None
+    m = GUID_IN_URL.search(url)
+    return m.group(1) if m else None
+
+
+# ============================================================
+# ВСПОМОГАТЕЛЬНОЕ
+# ============================================================
 def _get_ocr():
     """ddddocr грузится тяжело — держим один экземпляр на процесс."""
     global _ocr_instance
@@ -65,8 +172,31 @@ def _get_ocr():
                 raise RuntimeError(
                     "Требуется ddddocr: pip install -r requirements.txt"
                 ) from e
+
+            _ensure_utf8_stdout()
             _ocr_instance = ddddocr.DdddOcr(beta=True)
         return _ocr_instance
+
+
+def _ensure_utf8_stdout():
+    """
+    Переводит вывод в UTF-8, иначе с errors=replace.
+
+    ddddocr при инициализации печатает приветствие, а консоль Windows
+    по умолчанию в cp1251 — процесс падает с UnicodeEncodeError ещё до
+    начала поиска. Меняем кодировку потока, а не глушим вывод: иначе
+    строка лога из соседнего потока ушла бы в пустоту.
+    """
+    import sys
+
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):
+            pass       # поток уже перенаправлен или недоступен
 
 
 def _headless_default():
@@ -188,6 +318,7 @@ class ElicenseClient:
         self._owner = _BrowserOwner()
         self._playwright = None
         self._browser = None
+        self._doc_ctx = None
         self._closed = False
 
     # ----------------------------------------------------------
@@ -218,6 +349,12 @@ class ElicenseClient:
         self._closed = True
 
     def _close_browser(self):
+        if self._doc_ctx is not None:
+            try:
+                self._doc_ctx.close()
+            except Exception:
+                pass
+            self._doc_ctx = None
         if self._browser is not None:
             try:
                 self._browser.close()
@@ -252,6 +389,40 @@ class ElicenseClient:
             pass
         return page.locator(CAPTCHA_IMAGE).screenshot()
 
+    def _doc_context(self):
+        """
+        Контекст для страниц, где капча не нужна (карточка, API файлов).
+        Живёт вместе с браузером и закрывается вместе с ним.
+        """
+        if self._doc_ctx is None:
+            browser = self._ensure_browser()
+            self._doc_ctx = browser.new_context(
+                user_agent=USER_AGENT,
+                locale="ru-RU",
+                viewport={"width": 1440, "height": 900},
+            )
+        return self._doc_ctx
+
+    def _request_text(self, url):
+        return self._doc_context().request.get(url).text()
+
+    def _request_bytes(self, url):
+        return self._doc_context().request.get(url).body()
+
+    def warm_document_api(self):
+        """
+        Прогревает cookie страницы деталей. Само по себе не обязательно —
+        эндпоинты файлов отвечают и без неё, — но делает поведение
+        ближе к браузеру пользователя.
+        """
+        ctx = self._doc_context()
+        page = ctx.new_page()
+        try:
+            page.goto(BASE_URL + "/LicensingContent/SimpleSearchLicense?lang=ru",
+                      wait_until="domcontentloaded", timeout=self.timeout)
+        finally:
+            page.close()
+
     def _submit_and_check(self, page, captcha_text):
         """
         Заполняет капчу и отправляет форму.
@@ -275,11 +446,23 @@ class ElicenseClient:
         return "no_results", ""
 
     def _collect_pages(self, page):
-        """Читает все страницы выдачи текущей сессии."""
+        """
+        Читает все страницы выдачи текущей сессии.
+
+        Возвращает (records, pages_read, truncated). truncated=True, если
+        сайт обещал больше страниц, чем отдаёт.
+
+        Для поиска по названию заказчика это норма: пагинация рисуется на
+        все страницы, но запрос ?page=2 возвращает пустую страницу —
+        фильтр «Лицензиат» применяется уже после выборки первой страницы.
+        Без этого сигнала усечение выглядело бы как «найдено немного».
+        """
         records = []
         pages_read = 0
 
-        pages_total = min(total_pages(page.content()), self.max_pages)
+        pages_advertised = total_pages(page.content())
+        pages_total = min(pages_advertised, self.max_pages)
+
         for page_no in range(1, pages_total + 1):
             if page_no > 1:
                 page.goto(_page_url(page.url, page_no),
@@ -292,6 +475,8 @@ class ElicenseClient:
                                                   only_notifications=False))
             pages_read += 1
 
+        truncated = pages_read < pages_total
+
         # Убираем возможные дубли при повторной выдаче страниц
         seen, unique = set(), []
         for r in records:
@@ -301,7 +486,10 @@ class ElicenseClient:
             seen.add(key)
             unique.append(r)
 
-        return unique, pages_read
+        # Страницы склеиваются в порядке выдачи, а он по дате не отсортирован
+        # (внутри страницы сортировка уже есть). Сортируем итог целиком,
+        # иначе хронология разъезжается на многостраничных выдачах.
+        return sort_notifications(unique), pages_read, truncated
 
     @staticmethod
     def _split_notifications(records):
@@ -311,26 +499,163 @@ class ElicenseClient:
         return [r for r in records if marker in (r.get("activity") or "").lower()]
 
     # ----------------------------------------------------------
+    # Работа с PDF-уведомлениями
+    #
+    # Проверено: страница карточки, список файлов и само скачивание
+    # работают БЕЗ капчи. Капча нужна только для поиска по БИН, поэтому
+    # разбор накопленных уведомлений не требует её прогонять заново.
+    # ----------------------------------------------------------
+    def list_document_files(self, guid):
+        """Доступные языковые версии документа. Без капчи."""
+        import json as _json
+
+        url = FILE_LIST_API.format(guid=guid)
+        data = _json.loads(self._request_text(url))
+        return data.get("result") or []
+
+    def download_document(self, guid, document_guid):
+        """Байты файла документа."""
+        return self._request_bytes(DOWNLOAD_API.format(guid=guid,
+                                                       doc=document_guid))
+
+    def download_ru_document(self, guid):
+        """
+        Русская версия документа. Возвращает байты PDF или None,
+        если русской версии нет. Без капчи.
+        """
+        files = self.list_document_files(guid)
+        ru = next((f for f in files if (f.get("Lang") or "").lower() == "ru"), None)
+        if not ru:
+            return None
+        return self.download_document(guid, ru["Guid"])
+
+    def enrich_notifications(self, notifications, on_item=None, only_smr=True):
+        """
+        Дополняет уведомления данными из PDF: адрес объекта, дата приёма,
+        входящий номер, БИН заявителя, наименование объекта.
+
+        Работает без капчи. Возвращает новый список; исходный не меняется.
+        on_item(index, total, notification) — прогресс для SSE.
+
+        only_smr=True — качать PDF только для уведомлений о начале СМР.
+        Это в разы быстрее: в выдаче застройщика обычно десятки записей
+        других видов деятельности, а для даты начала стройки нужны
+        только уведомления о начале строительно-монтажных работ.
+
+        Публичный метод: выполняется в потоке-владельце, поэтому его
+        можно звать из любого потока сервера.
+        """
+        return self._owner.run(self._enrich_impl, notifications,
+                               on_item, only_smr)
+
+    def _enrich_impl(self, notifications, on_item=None, only_smr=True):
+        try:
+            from elicense_pdf import parse_pdf
+        except ImportError as e:
+            raise RuntimeError("Требуется elicense_pdf.py рядом с клиентом") from e
+
+        enriched = []
+
+        # Считаем только те, что реально будем качать — прогресс честный
+        targets = [
+            n for n in notifications
+            if not only_smr or NOTIFICATION_MARKER
+            in (n.get("activity") or "").lower()
+        ]
+        total = len(targets)
+        done = 0
+
+        for notif in notifications:
+            item = dict(notif)
+
+            if only_smr and NOTIFICATION_MARKER not in (
+                    (item.get("activity") or "").lower()):
+                enriched.append(item)      # не наше — оставляем как есть
+                continue
+
+            done += 1
+            guid = guid_from_url(item.get("detail_url"))
+
+            if guid:
+                try:
+                    data = self.download_ru_document(guid)
+                except Exception as e:
+                    data = None
+                    item["pdf_error"] = f"{type(e).__name__}: {e}"
+
+                if data:
+                    try:
+                        item["pdf"] = parse_pdf(data)
+                    except Exception as e:
+                        item["pdf_error"] = f"разбор PDF: {type(e).__name__}: {e}"
+                else:
+                    item["pdf_error"] = "русская версия документа недоступна"
+
+            # Плоские поля — их удобнее отдавать во фронтенд
+            pdf = item.get("pdf") or {}
+            item["address"] = pdf.get("address")
+            item["cadastral"] = pdf.get("cadastral")
+            item["received_date"] = pdf.get("received_date")
+            item["received_at"] = pdf.get("received_at")
+            item["incoming_number"] = pdf.get("incoming_number")
+            item["applicant_bin"] = pdf.get("applicant_bin")
+            item["object_name"] = pdf.get("object_name")
+
+            enriched.append(item)
+            if on_item:
+                try:
+                    on_item(done, total, item)
+                except Exception:
+                    pass
+
+        return enriched
+
+    # ----------------------------------------------------------
     # Публичное
     # ----------------------------------------------------------
-    def search(self, bin_number, on_attempt=None):
+    def search(self, bin_number=None, on_attempt=None, date_from=None,
+                   date_equality="gte", licensiat=None,
+                   licensiat_equality="eq"):
         """
-        Ищет уведомления по БИН. Возвращает словарь:
-            success, bin, attempts, notifications, records,
-            company, pages, stats, error, history
+        Ищет уведомления на elicense.kz.
 
-        on_attempt(info) — необязательный колбэк, вызывается после каждой
-        попытки капчи, пока запрос ещё не завершён. Позволяет отдавать
-        прогресс в SSE в реальном времени.
+        bin_number        — поиск по БИН заказчика;
+        licensiat         — поиск по наименованию заказчика (поле «Лицензиат»).
+                            Берётся прямо из реестра проектов qportal, поэтому
+                            знать БИН заранее не требуется: он потом
+                            извлекается из PDF уведомления.
+                            Если заданы оба — работают оба условия.
+        licensiat_equality— оператор «Лицензиат»: eq (по умолчанию), gt,
+                            gte, lt, lte.
+        date_from         — фильтр «Дата выдачи»;
+        date_equality     — оператор фильтра: gte (по умолчанию), gt, lte,
+                            lt, eq.
+        on_attempt        — колбэк прогресса по попыткам капчи.
 
         Вся работа с браузером происходит в потоке-владельце, поэтому
-        метод безопасно звать из любого потока.
+        метод безопасно звать из любого потока сервера.
         """
         if self._closed:
             raise RuntimeError("Клиент уже закрыт")
-        return self._owner.run(self._search_impl, bin_number, on_attempt)
 
-    def _search_impl(self, bin_number, on_attempt):
+        bin_number = str(bin_number or "").strip() or None
+        licensiat = str(licensiat or "").strip() or None
+
+        if not bin_number and not licensiat:
+            raise ValueError("Нужно указать bin= или licensiat=")
+
+        if licensiat_equality not in LICENSIAT_EQUALITY:
+            raise ValueError(
+                f"Неизвестный оператор «Лицензиат»: {licensiat_equality!r}, "
+                f"допустимо {sorted(LICENSIAT_EQUALITY)}")
+
+        return self._owner.run(self._search_impl, bin_number, on_attempt,
+                               date_from, date_equality, licensiat,
+                               licensiat_equality)
+
+    def _search_impl(self, bin_number=None, on_attempt=None, date_from=None,
+                     date_equality="gte", licensiat=None,
+                     licensiat_equality="eq"):
         def _notify(**info):
             if on_attempt:
                 try:
@@ -339,9 +664,11 @@ class ElicenseClient:
                     pass    # колбэк прогресса не должен ронять поиск
 
         bin_number = str(bin_number or "").strip()
+        licensiat = str(licensiat or "").strip()
         result = {
             "success": False,
             "bin": bin_number,
+            "licensiat": licensiat,
             "attempts": 0,
             "notifications": [],
             "records": [],
@@ -350,14 +677,16 @@ class ElicenseClient:
             "stats": None,
             "error": None,
             "history": [],
+            "date_from": iso_date(date_from),
+            "date_equality": date_equality if iso_date(date_from) else None,
         }
 
-        if not bin_number:
-            result["error"] = "Пустой БИН"
+        if bin_number and not bin_number.isdigit():
+            result["error"] = f"БИН должен состоять из цифр: {bin_number!r}"
             return result
 
-        if not bin_number.isdigit():
-            result["error"] = f"БИН должен состоять из цифр: {bin_number!r}"
+        if not bin_number and not licensiat:
+            result["error"] = "Нужно указать БИН или наименование лицензиата"
             return result
 
         ocr = _get_ocr()
@@ -378,7 +707,27 @@ class ElicenseClient:
                 page.goto(SEARCH_URL, wait_until="domcontentloaded",
                           timeout=self.timeout)
 
-                page.fill(BIN_INPUT, bin_number)
+                # Условия поиска: БИН и/или наименование лицензиата
+                if bin_number:
+                    page.fill(BIN_INPUT, bin_number)
+                if licensiat:
+                    page.select_option(
+                        LICENSIAT_SELECT,
+                        LICENSIAT_EQUALITY[licensiat_equality])
+                    page.fill(LICENSIAT_INPUT, licensiat[:300])
+                    _notify(attempt=attempt, total=self.retries,
+                            status="licensiat", name=licensiat,
+                            operator=licensiat_equality)
+
+                # Фильтр «Дата выдачи» — заполняем до отправки формы
+                date_value = iso_date(date_from)
+                if date_value:
+                    op = DATE_EQUALITY.get(date_equality, DATE_EQUALITY["gte"])
+                    page.select_option(DATE_SELECT, op)
+                    page.fill(DATE_INPUT, date_value)
+                    _notify(attempt=attempt, total=self.retries,
+                            status="filtering", date_issue=date_value,
+                            operator=date_equality)
 
                 page.locator(CAPTCHA_IMAGE).wait_for(
                     state="visible", timeout=self.timeout)
@@ -397,15 +746,19 @@ class ElicenseClient:
                         status=status, captcha=captcha_text, note=msg)
 
                 if status == "ok":
-                    records, pages_read = self._collect_pages(page)
+                    records, pages_read, truncated = self._collect_pages(page)
                     notifs = self._split_notifications(records)
-                    licensiat = next((r.get("licensiat") for r in records
-                                      if r.get("licensiat")), None)
+                    # Как заказчик записан в самой выдаче: при расхождении
+                    # с запросом видно, что запись в реестре неточна.
+                    found_name = next((r.get("licensiat") for r in records
+                                       if r.get("licensiat")), None)
                     result.update({
                         "success": True,
                         "notifications": notifs,
                         "records": records,
-                        "company": licensiat,
+                        "company": found_name,
+                        "licensiat_operator": licensiat_equality,
+                        "truncated": truncated,
                         "pages": pages_read,
                         "stats": summarize(notifs),
                     })

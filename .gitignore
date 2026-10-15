@@ -12,6 +12,11 @@ venv/
 bin_cache.json
 geocode_cache.json
 
+# База данных SQLite
+maptool.db
+maptool.db-wal
+maptool.db-shm
+
 # Накопленные данные eLicense
 elicense_data.json
 
@@ -20,3 +25,14 @@ captcha.png
 captchas/
 elicense_result.html
 elicense_result.png
+
+# Отладочные файлы: всё временное живёт с префиксом «_»
+_*
+_bad.pdf
+_*.txt
+_e2e.py
+_debug_bad.py
+
+# Лог запуска сервера
+server_out.log
+server_err.log

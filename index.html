@@ -219,7 +219,7 @@
         .foot-row .code {
             margin-top: 0;      /* убираем верхний отступ, он теперь у родителя */
             flex: 1 1 auto;
-            min-width: 0;ма
+            min-width: 0;
             overflow: hidden;
             text-overflow: ellipsis;
             white-space: nowrap;
@@ -227,6 +227,47 @@
         .foot-row .route-btn {
             margin-top: 0;      /* убираем верхний отступ */
             flex: 0 0 auto;
+        }
+
+        /* Бейдж «Начало СМР» из данных elicense.kz */
+        .license-box {
+            margin-top: 10px;
+            padding: 8px 10px;
+            background: var(--accent-bg);
+            border: 1px solid #cdebd8;
+            border-radius: 8px;
+        }
+        .license-start {
+            display: flex;
+            align-items: baseline;
+            gap: 8px;
+        }
+        .license-cap {
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            color: var(--accent);
+            opacity: .8;
+            white-space: nowrap;
+        }
+        .license-date {
+            font-size: 13.5px;
+            font-weight: 600;
+            color: #14532d;
+        }
+        .license-meta {
+            margin-top: 3px;
+            font-size: 11.5px;
+            color: var(--text-soft);
+        }
+
+        /* В попапе маркера бейдж чуть компактнее */
+        .zhk-popup .license-box {
+            margin: 8px 0;
+        }
+        .zhk-popup .license-date {
+            font-size: 13px;
         }
 
         /* Кнопка "Маршрут" */
@@ -469,12 +510,18 @@
             crossOrigin: true
         }).addTo(map);
 
-        const greenIcon = L.icon({
-            iconUrl: 'https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-green.png',
-            shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
-            iconSize: [25,41], iconAnchor: [12,41],
-            popupAnchor: [1,-34], shadowSize: [41,41]
-        });
+        // Маркеры: зелёный — данные есть, синий — уведомлений не найдено.
+        // Цвет выбирается по наличию даты начала строительства.
+        function makeIcon(color) {
+            return L.icon({
+                iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-${color}.png`,
+                shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/images/marker-shadow.png',
+                iconSize: [25,41], iconAnchor: [12,41],
+                popupAnchor: [1,-34], shadowSize: [41,41]
+            });
+        }
+        const greenIcon = makeIcon('green');
+        const blueIcon  = makeIcon('blue');
 
         // ============================================================
         // 2. Данные
@@ -482,6 +529,10 @@
         const zhkList     = [];
         const markersById = new Map();
         const cardsById   = new Map();
+
+        // Данные elicense.kz, пришедшие отдельным запросом:
+        // licensesById → { start_date, bin, company, notifications[] }
+        const licensesById = new Map();
 
         const listEl     = document.getElementById('list');
         const emptyEl    = document.getElementById('empty');
@@ -572,10 +623,55 @@
                                 <polyline points="12 5 19 12 12 19"/>
                            </svg>`;
 
+        // ============================================================
+        // 3.1 Данные elicense.kz: дата начала строительства
+        // ============================================================
+        const MONTHS_GEN = ['января','февраля','марта','апреля','мая','июня',
+                            'июля','августа','сентября','октября','ноября','декабря'];
+
+        function formatDateRu(iso) {
+            if (!iso) return '';
+            const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso);
+            if (!m) return iso;
+            return `${+m[3]} ${MONTHS_GEN[+m[2] - 1]} ${m[1]}`;
+        }
+
+        function licenseOf(id) {
+            return licensesById.get(id) || null;
+        }
+
+        function pluralRu(n, one, few, many) {
+            const m10 = n % 10, m100 = n % 100;
+            if (m10 === 1 && m100 !== 11) return one;
+            if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few;
+            return many;
+        }
+
+        // Бейдж с датой начала СМР — и в карточке списка, и в попапе
+        function licenseBadge(id) {
+            const lic = licenseOf(id);
+            if (!lic) return '';
+            const count = (lic.notifications || []).length;
+            const word = pluralRu(count, 'уведомление', 'уведомления', 'уведомлений');
+            return `
+                <div class="license-box">
+                    <div class="license-start">
+                        <span class="license-cap">Начало СМР</span>
+                        <span class="license-date">${escapeHtml(formatDateRu(lic.start_date)) || '—'}</span>
+                    </div>
+                    <div class="license-meta">
+                        ${count} ${word}
+                        ${lic.bin ? ` · БИН ${escapeHtml(lic.bin)}` : ''}
+                        ${lic.method === 'geocode' ? ' · по адресу' : ''}
+                    </div>
+                </div>`;
+        }
+
         function popupHtml(zhk) {
             return `
                 <div class="zhk-popup">
                     <b>${escapeHtml(cutTail(zhk.name)) || '—'}</b>
+                    ${licenseBadge(zhk.id)}
                     ${copyRow('Адрес:', zhk.address)}
                     ${copyRow('Заказчик:', zhk.customer)}
                     ${zhk.customer_bin ? copyRow('БИН:', zhk.customer_bin) : ''}
@@ -592,6 +688,7 @@
             const route = route2gisUrl(zhk);
             return `
                 <div class="title">${escapeHtml(cutTail(zhk.name)) || '—'}</div>
+                ${licenseBadge(zhk.id)}
                 ${copyRow('Адрес:', zhk.address)}
                 ${copyRow('Заказчик:', zhk.customer)}
                 ${zhk.customer_bin ? copyRow('БИН:', zhk.customer_bin) : ''}
@@ -668,6 +765,67 @@
         }
 
         // ============================================================
+        // 5.5 Данные elicense.kz: подтягиваем даты и красим маркеры
+        // ============================================================
+        function applyLicenses(licenses) {
+            licensesById.clear();
+            Object.keys(licenses || {}).forEach(k => {
+                licensesById.set(k, licenses[k]);
+            });
+
+            let painted = 0;
+
+            markersById.forEach(({ marker, zhk }, id) => {
+                if (!licensesById.has(id)) return;
+                marker.setIcon(greenIcon);
+                painted++;
+
+                // Обновляем попап маркера
+                if (marker.getPopup()) marker.setPopupContent(popupHtml(zhk));
+
+                // В карточке меняем только сам бейдж, карточку не пересоздаём —
+                // иначе теряется класс active и навешиваются дубли обработчиков
+                const card = cardsById.get(id);
+                if (card) {
+                    const old = card.querySelector('.license-box');
+                    if (old) old.remove();
+
+                    const title = card.querySelector('.title');
+                    const tmp = document.createElement('div');
+                    tmp.innerHTML = licenseBadge(id);
+                    const badge = tmp.firstElementChild;
+                    if (badge) title.insertAdjacentElement('afterend', badge);
+                }
+            });
+
+            if (painted) console.log(`[elicense] окрашено маркеров: ${painted}`);
+            return painted;
+        }
+
+        async function loadLicenses() {
+            try {
+                const res = await fetch('/api/licenses');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                if (!data.success) throw new Error(data.message || 'ошибка');
+
+                const painted = applyLicenses(data.licenses);
+                const s = data.stats || {};
+                console.log(`[elicense] уведомлений: ${s.notifications}, ` +
+                            `по БИН: ${s.matched_bin}, по адресу: ${s.matched_geocode}, ` +
+                            `без сопоставления: ${s.no_match}, ` +
+                            `маркеров с датой: ${painted}`);
+
+                if (s.no_match) {
+                    console.warn('[elicense] не сопоставлено:', data.unmatched);
+                }
+            } catch (e) {
+                // Не критично: карта и список работают и без этих данных
+                console.warn('[elicense] не удалось загрузить даты:', e.message);
+            }
+        }
+
+        // ============================================================
         // 6. Поиск
         // ============================================================
         function applyFilter() {
@@ -739,6 +897,8 @@
             es.close();
             applyFilter();
             console.log('SSE завершён:', e.data);
+            // Подтягиваем даты начала строительства отдельным запросом
+            loadLicenses();
         });
 
         es.addEventListener('error', e => {
