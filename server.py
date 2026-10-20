@@ -50,6 +50,7 @@ import json
 import os
 import queue
 import re
+import signal
 import threading
 import time
 from datetime import datetime, timedelta
@@ -2002,7 +2003,14 @@ if __name__ == "__main__":
     # сервера может держать 8000 (HTTPServer разрешает повторную привязку),
     # и запросы уходят к нему, а не к свежезапущенному. Тогда поднимаем
     # новый экземпляр на свободном порту.
-    port = int(os.environ.get("MAPTOOL_PORT") or 8000)
+    #
+    # PORT — стандартная переменная облачных платформ (Cloud Run, Cloud
+    # Run jobs, Heroku-подобные): там она равна 8080, и контейнер обязан
+    # слушать именно её. MAPTOOL_PORT остаётся для локальных запусков
+    # и для поднятия второго экземпляра рядом с уже занятым 8000.
+    port = int(os.environ.get("MAPTOOL_PORT")
+               or os.environ.get("PORT")
+               or 8000)
     os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
     httpd = ThreadedHTTPServer(("", port), Handler)
@@ -2060,6 +2068,25 @@ if __name__ == "__main__":
     print("Ctrl+C для остановки.\n")
 
     start_background_jobs()
+
+    # Облачные платформы останавливают контейнер сигналом SIGTERM, а
+    # не Ctrl+C: serve_forever такой сигнал не перехватывает, и
+    # процесс умирает мгновенно — без закрытия браузера, без
+    # остановки бота и без checkpoint'а WAL. Ловим его сами.
+    def _on_term(signum, frame):
+        print("\nПолучен сигнал остановки, завершаюсь…")
+        # shutdown() нельзя звать из потока, который крутит
+        # serve_forever: тот ждёт завершения вызова и deadlock'ится.
+        # Поэтому поднимаем отдельный поток.
+        threading.Thread(target=httpd.shutdown, daemon=True).start()
+
+    for _sig in (getattr(signal, "SIGTERM", None), getattr(signal, "SIGINT", None)):
+        if _sig is None:
+            continue
+        try:
+            signal.signal(_sig, _on_term)
+        except (ValueError, OSError):
+            pass    # не главный поток или платформа не поддерживает
 
     try:
         httpd.serve_forever()

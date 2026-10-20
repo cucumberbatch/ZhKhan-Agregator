@@ -1,0 +1,36 @@
+# В образ не нужны: локальная база, логи, кэши и артефакты прогонов.
+# maptool.db в образ попадать не должен — в контейнере база живёт
+# на подключённом томе, и запечённая копия только путает.
+
+maptool.db
+maptool.db-wal
+maptool.db-shm
+*.db
+*.db-wal
+*.db-shm
+
+backup_json_*/
+# testdata/ НЕ исключаем: по нему работает тестовый режим
+# (MAPTOOL_TEST=1), который в AGENTS.md описан как основной способ
+# правки вёрстки. Фигстуры весят 160 КБ.
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+.git/
+.gitignore
+*.log
+srv.log
+srv.err
+srv.out
+server_out.log
+server_err.log
+
+elicense_result.html
+elicense_result.png
+captcha.png
+captchas/
+
+*.md
+!README.md

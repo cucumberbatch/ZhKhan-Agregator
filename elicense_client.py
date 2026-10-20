@@ -204,6 +204,32 @@ def _headless_default():
     return val not in ("0", "false", "no", "off")
 
 
+def _container_chromium_args():
+    """Дополнительные флаги Chromium, если мы внутри контейнера.
+
+    В Docker образ Chromium обычно запускается от root, а песочница
+    под root не работает: Chromium падает с «Running as root without
+    --no-sandbox is not supported». На обычной машине флаг не нужен
+    и без него безопаснее, поэтому добавляем его только когда
+    реально работаем от root.
+
+    На сервере дополнительно полезно ограничить потребление памяти
+    и не давать Chromium уйти в swap.
+    """
+    args = []
+    try:
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            args.append("--no-sandbox")
+    except (AttributeError, OSError):
+        pass
+
+    if os.environ.get("ELICENSE_CHROMIUM_ARGS"):
+        args += [a for a in os.environ["ELICENSE_CHROMIUM_ARGS"].split()
+                 if a.strip()]
+
+    return args
+
+
 def _is_captcha_failed(page):
     """Сообщение об ошибке капчи на elicense.kz."""
     try:
@@ -339,7 +365,8 @@ class ElicenseClient:
         self._playwright = sync_playwright().start()
         self._browser = self._playwright.chromium.launch(
             headless=self.headless,
-            args=["--disable-blink-features=AutomationControlled"],
+            args=["--disable-blink-features=AutomationControlled"]
+            + _container_chromium_args(),
         )
         return self._browser
 

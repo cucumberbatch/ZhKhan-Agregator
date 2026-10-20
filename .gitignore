@@ -36,3 +36,8 @@ _debug_bad.py
 # Р›РѕРі Р·Р°РїСѓСЃРєР° СЃРµСЂРІРµСЂР°
 server_out.log
 server_err.log
+# Логи запуска (общее имя)
+srv.log
+srv.err
+srv.out
+
