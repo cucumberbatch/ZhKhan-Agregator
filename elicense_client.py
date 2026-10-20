@@ -213,15 +213,24 @@ def _container_chromium_args():
     и без него безопаснее, поэтому добавляем его только когда
     реально работаем от root.
 
-    На сервере дополнительно полезно ограничить потребление памяти
-    и не давать Chromium уйти в swap.
+    Отдельная переменная ELICENSE_NO_SANDBOX=1 включает флаг
+    принудительно. Это нужно на платформах без возможности настроить
+    seccomp-профиль и --ipc=host: Cloud Run применяет свой seccomp и
+    песочница Chromium там не поднимается. Ошибиться в имени
+    переменной нельзя, поэтому это отдельный флаг, а не строчка в
+    ELICENSE_CHROMIUM_ARGS.
     """
     args = []
-    try:
-        if hasattr(os, "geteuid") and os.geteuid() == 0:
-            args.append("--no-sandbox")
-    except (AttributeError, OSError):
-        pass
+
+    force_no_sandbox = os.environ.get("ELICENSE_NO_SANDBOX", "").strip().lower()
+    if force_no_sandbox in ("1", "true", "yes", "on"):
+        args.append("--no-sandbox")
+    else:
+        try:
+            if hasattr(os, "geteuid") and os.geteuid() == 0:
+                args.append("--no-sandbox")
+        except (AttributeError, OSError):
+            pass
 
     if os.environ.get("ELICENSE_CHROMIUM_ARGS"):
         args += [a for a in os.environ["ELICENSE_CHROMIUM_ARGS"].split()
