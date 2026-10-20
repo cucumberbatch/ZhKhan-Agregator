@@ -168,11 +168,75 @@ gcloud config set project zhkhan
 gcloud services enable compute.googleapis.com
 ```
 
-Нужен **платёжный аккаунт с картой**: без привязки биллинга free tier
-не работает. Деньги при этом не списываются, пока укладываетесь в
-лимиты. Следите за бюджетными алертами, а не за жёстким лимитом
-расходов: у Cloud Run срабатывание лимита **останавливает сервисы**
-и они начинают отдавать 5xx.
+### Триал и Free Tier — это разные вещи
+
+На странице
+`docs.cloud.google.com/free/docs/free-cloud-features` соседствуют
+два механизма, и их важно не путать.
+
+**Free Trial** — рекламный кредит: $300 на 90 дней, «you won't be
+billed». Карта при регистрации обязательна, но снимается не списание,
+а временный hold на $0–$1 («not an actual charge») — для проверки
+личности и против фрода.
+
+**Free Tier** — постоянные месячные квоты, которые не сгорают:
+
+> 1 non-preemptible e2-micro VM instance per month in one of the
+> following US regions: Oregon us-west1, Iowa us-central1,
+> South Carolina us-east1.
+> 30 GB-months standard persistent disk.
+> 1 GB of outbound data transfer from North America to all region
+> destinations (excluding China and Australia) per month.
+>
+> Your Free Tier e2-micro instance limit is by time, not by instance.
+> Each month, eligible use of all of your e2-micro instances is free
+> until you have used a number of hours equal to the total hours in
+> the current month.
+
+То есть e2-micro, работающий круглосуточно, целиком укладывается в
+квоту: лимит считается по часам, а не по числу инстансов, и все
+инстансы суммируются. Отдельная машина «сверх» квоты не оплачивается
+неиспользуемыми часами.
+
+**Ключевое: во время триала Free Tier уже доступен**, но чтобы он
+продолжил работать после 90-го дня, нужно перейти на платный
+биллинговый аккаунт:
+
+> Although upgrading to a Paid billing account ends your Free
+> Trial, you keep any unused credit until it expires 90 days from the
+> Free Trial signup, and you continue to have access to the Free Tier.
+
+А если не перейти:
+
+> If you don't upgrade to a Paid billing account before 90 days pass
+> or if you spend the $300 in free credit, then your Free Trial
+> billing account will be closed and all of its associated projects
+> and resources will be stopped.
+
+Дальше — 30 дней пощады, потом «your Free Trial resources are
+permanently deleted». Ресурсы, созданные во время триала, при
+своевременном переходе на платный аккаунт продолжают работать без
+перерыва.
+
+Практический порядок:
+
+1. Зарегистрироваться, дать карту (только hold $0–$1).
+2. Первые 90 дней: e2-micro бесплатно плюс $300 кредита на всё
+   остальное.
+3. **До 90-го дня** переключить биллинговый аккаунт на платный.
+4. Дальше: e2-micro остаётся бесплатным в рамках квоты, всё сверх
+   квоты — платно.
+
+Карта нужна в любом случае, но списываний не будет, пока вы внутри
+квот. Поэтому ставьте **бюджетный алерт**, а не жёсткий лимит
+расходов: у Cloud Run срабатывание лимита останавливает сервисы и
+они начинают отдавать 5xx.
+
+Отдельно про 1 ГБ исходящего трафика в месяц: одна загрузка
+страницы тянет ~160 КБ списка по SSE, то есть месяц выдерживает
+около 6000 открытий. Для тестового проекта с парой десятков
+пользователей это с большим запасом. Тайлы карты идут с CDN
+OpenStreetMap и в ваш трафик не входят.
 
 ### 2. Машина
 
