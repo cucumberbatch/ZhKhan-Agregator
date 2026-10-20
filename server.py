@@ -348,6 +348,15 @@ def perform_refresh():
             pass
         _elicense_client = None
 
+    # Освобождаем OCR-модель: около 100 МБ, которые до этого висели
+    # в памяти весь остаток жизни процесса. На машине с 1 ГиБ памяти
+    # это существенно — между обходами модель не нужна.
+    try:
+        if elicense_client.release_ocr():
+            print("[refresh] OCR-модель выгружена")
+    except Exception as e:
+        print(f"[refresh] не удалось выгрузить OCR: {type(e).__name__}: {e}")
+
     matched = _licenses_snapshot()
     notifications = elicense_store.all_notifications()
 

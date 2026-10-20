@@ -178,6 +178,63 @@ def _get_ocr():
         return _ocr_instance
 
 
+def release_ocr():
+    """
+    Выгружает OCR-модель из памяти, если она больше не нужна.
+
+    Модель занимает около 100 МБ и держится в глобальной переменной
+    весь остаток жизни процесса. На машине с 1 ГиБ памяти это
+    существенно.
+
+    Честно о том, что даёт выгрузка: Python-объект уничтожается,
+    но RSS процесса на Windows остаётся прежним (замер: 116 МБ до и
+    после) — onnxruntime держит собственную арену. glibc крупные
+    блоки возвращает в ОС сам, проверено отдельным замером, но на
+    арене onnxruntime этого может не произойти.
+
+    Поэтому выгрузка — это в первую очередь гигиена: с моделью в
+    глобальной переменной она переживает любые ошибки и повторно
+    грузится при следующем обращении. Гарантированно вернуть эти
+    100 МБ в ОС можно только вынеся OCR в отдельный процесс, который
+    завершается после обхода.
+
+    Ничего не делает, если жив хотя бы один клиент elicense: иначе
+    параллельный ручной запрос поднял бы вторую модель.
+
+    Возвращает True, если модель была выгружена.
+    """
+    global _ocr_instance
+    with _ocr_lock:
+        if _ocr_instance is None:
+            return False
+        # Пока жив хоть один клиент, модель может быть в работе:
+        # выгружать её сейчас — значит поднять вторую при следующем
+        # обращении, а это лишние ~100 МБ.
+        try:
+            with ElicenseClient._active_lock:
+                if ElicenseClient._active > 0:
+                    return False
+        except (NameError, AttributeError):
+            pass
+        _ocr_instance = None
+    # Сборщик мусора освобождает память не сразу: onnxruntime держит
+    # arenas, поэтому подсказываем системе вернуть её.
+    try:
+        import gc
+        gc.collect()
+    except Exception:
+        pass
+
+    # malloc_trim возвращает свободные страницы арены glibc в ОС.
+    # На Windows malloc_trim нет, там своя куча.
+    try:
+        import ctypes
+        ctypes.CDLL("libc.so.6").malloc_trim(0)
+    except Exception:
+        pass
+    return True
+
+
 def _ensure_utf8_stdout():
     """
     Переводит вывод в UTF-8, иначе с errors=replace.
@@ -342,6 +399,13 @@ class ElicenseClient:
     на каждый запрос. Закрывается через close() или context manager.
     """
 
+    # Счётчик живых клиентов: пока он не ноль, OCR-модель выгружать
+    # нельзя. Иначе ручной запрос к /api/elicense, идущий параллельно
+    # с ночным обходом, поднял бы вторую модель — а на машине с 1 ГиБ
+    # это лишние 95 МБ и риск OOM.
+    _active = 0
+    _active_lock = threading.Lock()
+
     def __init__(self, headless=None, retries=DEFAULT_RETRIES,
                  retry_delay=RETRY_DELAY, max_pages=MAX_PAGES, timeout=30000):
         self.headless = _headless_default() if headless is None else headless
@@ -355,6 +419,9 @@ class ElicenseClient:
         self._browser = None
         self._doc_ctx = None
         self._closed = False
+
+        with ElicenseClient._active_lock:
+            ElicenseClient._active += 1
 
     # ----------------------------------------------------------
     # Жизненный цикл браузера (только в потоке-владельце!)
@@ -383,6 +450,9 @@ class ElicenseClient:
         self._owner.run(self._close_browser)
         self._owner.shutdown()
         self._closed = True
+        with ElicenseClient._active_lock:
+            if ElicenseClient._active > 0:
+                ElicenseClient._active -= 1
 
     def _close_browser(self):
         if self._doc_ctx is not None:
